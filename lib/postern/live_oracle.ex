@@ -1,9 +1,16 @@
 defmodule Postern.LiveOracle do
   @moduledoc """
-  Supervised, reconnecting PostgreSQL live oracle.
+  The PostgreSQL connection the live features read through.
 
-  A failed connection is represented as an unavailable oracle. It never raises
-  into the language server process and retries with bounded exponential backoff.
+  Postgrex connects in the background and keeps retrying on its own, and a
+  query on a pool whose connection is down waits seconds in the queue before
+  it is dropped, which would stall every request the language server makes.
+  So the oracle does not ask the pool whether the server is there: it listens
+  for the connection's own notifications, and until one arrives, or after the
+  connection drops, a snapshot is an availability error at once. The one
+  exception is the first check after the oracle starts, which waits a moment
+  for the connection to come up, so a server that answers quickly is live
+  from the start. Nothing here raises into the language server process.
   """
 
   use GenServer
@@ -12,6 +19,9 @@ defmodule Postern.LiveOracle do
 
   @backoff_start 1_000
   @backoff_max 30_000
+
+  # How long the first check after the oracle starts waits for the connection.
+  @connect_grace 2_000
 
   @settings_query """
   select name, setting, unit, context, source, sourcefile, sourceline,
@@ -80,19 +90,27 @@ defmodule Postern.LiveOracle do
     do: GenServer.call(oracle, {:execute, command, arguments}, 20_000)
 
   @impl true
-  def init(nil),
-    do:
-      {:ok, %{options: nil, conn: nil, monitor: nil, status: :disabled, backoff: @backoff_start}}
+  def init(nil), do: {:ok, state(nil, :disabled)}
 
   def init(options) do
     send(self(), :connect)
-
-    {:ok,
-     %{options: options, conn: nil, monitor: nil, status: :connecting, backoff: @backoff_start}}
+    {:ok, state(options, :connecting)}
   end
 
   @impl true
   def handle_call(:status, _from, state), do: {:reply, state.status, state}
+
+  # Postgrex is still on its first attempt: give it until the deadline.
+  def handle_call(:snapshot, _from, %{status: :connecting, conn: conn} = state)
+      when is_pid(conn) do
+    remaining = max(state.deadline - System.monotonic_time(:millisecond), 0)
+
+    receive do
+      {:connected, _pid} -> {:reply, query_snapshot(conn), %{state | status: :connected}}
+    after
+      remaining -> {:reply, {:error, :unreachable}, %{state | status: :unreachable}}
+    end
+  end
 
   def handle_call(:snapshot, _from, %{status: status} = state)
       when status in [:disabled, :connecting, :unreachable] do
@@ -103,7 +121,8 @@ defmodule Postern.LiveOracle do
     {:reply, query_snapshot(conn), state}
   end
 
-  def handle_call({:execute, _command, _arguments}, _from, %{conn: nil} = state) do
+  def handle_call({:execute, _command, _arguments}, _from, %{status: status} = state)
+      when status != :connected do
     {:reply, {:error, :unreachable}, state}
   end
 
@@ -139,24 +158,57 @@ defmodule Postern.LiveOracle do
     end
   end
 
+  # Postgrex reports each connection it makes and loses, and reconnects on
+  # its own after a loss.
+  def handle_info({:connected, _pid}, state),
+    do: {:noreply, %{state | status: :connected, backoff: @backoff_start}}
+
+  def handle_info({:disconnected, _pid}, state), do: {:noreply, %{state | status: :unreachable}}
+
+  # The pool itself went, which Postgrex does not recover from: start another.
   def handle_info({:DOWN, monitor, :process, _pid, _reason}, %{monitor: monitor} = state) do
     schedule_retry(%{state | conn: nil, monitor: nil, status: :unreachable})
   end
 
   def handle_info(_message, state), do: {:noreply, state}
 
+  @impl true
+  def terminate(_reason, %{conn: conn}) when is_pid(conn) do
+    GenServer.stop(conn)
+  catch
+    :exit, _reason -> :ok
+  end
+
+  def terminate(_reason, _state), do: :ok
+
+  # The oracle is started from the request that configures it, which GenLSP
+  # runs in a task of its own, so it must not trap exits: the task's normal
+  # end would be the oracle's end too. The pool is unlinked and watched
+  # instead, and stopped with the oracle.
   defp connect(state, options) do
-    case Postgrex.start_link(options) do
+    case Postgrex.start_link(options ++ [connection_listeners: [self()]]) do
       {:ok, conn} ->
         Process.unlink(conn)
         monitor = Process.monitor(conn)
+        deadline = System.monotonic_time(:millisecond) + @connect_grace
 
         {:noreply,
-         %{state | conn: conn, monitor: monitor, status: :connected, backoff: @backoff_start}}
+         %{state | conn: conn, monitor: monitor, status: :connecting, deadline: deadline}}
 
       {:error, _reason} ->
         schedule_retry(state)
     end
+  end
+
+  defp state(options, status) do
+    %{
+      options: options,
+      conn: nil,
+      monitor: nil,
+      status: status,
+      deadline: nil,
+      backoff: @backoff_start
+    }
   end
 
   defp schedule_retry(%{backoff: backoff} = state) do

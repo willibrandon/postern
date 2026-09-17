@@ -1,6 +1,8 @@
 defmodule Postern.LiveOracleTest do
   use ExUnit.Case, async: true
 
+  import ExUnit.CaptureLog
+
   alias Postern.LiveOracle
 
   test "is disabled without connection configuration and never raises" do
@@ -8,6 +10,47 @@ defmodule Postern.LiveOracleTest do
 
     assert LiveOracle.status(oracle) == :disabled
     assert LiveOracle.snapshot(oracle) == {:error, :disabled}
+  end
+
+  test "a server that refuses the connection is unreachable, at once after the first check" do
+    {:ok, listen} = :gen_tcp.listen(0, [])
+    {:ok, port} = :inet.port(listen)
+    :ok = :gen_tcp.close(listen)
+
+    capture_log(fn ->
+      # Started from a task that ends at once, as the initialize request's
+      # does, and the oracle has to outlive it.
+      {:ok, oracle} =
+        Task.async(fn ->
+          LiveOracle.start_link(
+            hostname: "127.0.0.1",
+            port: port,
+            username: "postgres",
+            database: "postgres",
+            password: ""
+          )
+        end)
+        |> Task.await()
+
+      assert LiveOracle.snapshot(oracle) == {:error, :unreachable}
+      assert LiveOracle.status(oracle) == :unreachable
+      assert Process.alive?(oracle)
+
+      {elapsed, snapshot} = :timer.tc(fn -> LiveOracle.snapshot(oracle) end, :millisecond)
+      assert snapshot == {:error, :unreachable}
+      assert elapsed < 500
+
+      assert LiveOracle.execute(oracle, "postern.reloadConfig") == {:error, :unreachable}
+      GenServer.stop(oracle)
+    end)
+  end
+
+  @tag :live
+  test "a server that answers is live from the first check" do
+    {:ok, oracle} = LiveOracle.start_link(LiveOracle.connection_options(%{}))
+
+    assert %{settings: [_ | _], file_settings: _} = LiveOracle.snapshot(oracle)
+    assert LiveOracle.status(oracle) == :connected
   end
 
   defmodule SnapshotStub do
