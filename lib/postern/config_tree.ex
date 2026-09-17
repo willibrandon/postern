@@ -16,6 +16,7 @@ defmodule Postern.ConfigTree do
   """
 
   alias Postern.Catalog
+  alias Postern.FileKind
   alias Postern.Files
   alias Postern.Parser.PgHba
   alias Postern.Parser.PgIdent
@@ -60,6 +61,7 @@ defmodule Postern.ConfigTree do
   """
   @spec for_document(kind(), Path.t(), Files.t(), keyword()) :: t()
   def for_document(kind, path, files, opts \\ []) do
+    path = FileKind.canonical(path)
     resolve(kind, root(kind, path, files, opts) || path, files, opts)
   end
 
@@ -72,6 +74,8 @@ defmodule Postern.ConfigTree do
   @doc "The root of the tree a document belongs to, or `nil` when no root reaches it."
   @spec root(kind(), Path.t(), Files.t(), keyword()) :: Path.t() | nil
   def root(kind, path, files, opts \\ []) do
+    path = FileKind.canonical(path)
+
     if Path.basename(path) == root_name(kind) do
       path
     else
@@ -82,6 +86,7 @@ defmodule Postern.ConfigTree do
   @doc "Resolves the tree under a root."
   @spec resolve(kind(), Path.t(), Files.t(), keyword()) :: t()
   def resolve(kind, root, files, opts \\ []) do
+    root = FileKind.canonical(root)
     version = opts[:version] || Catalog.latest()
     follow = kind == :postgresql_conf or PgHbaOptions.directives?(version)
 
@@ -268,6 +273,7 @@ defmodule Postern.ConfigTree do
           []
 
         workspace ->
+          workspace = FileKind.canonical(workspace)
           Enum.flat_map(@workspace_depths, &Path.wildcard(Path.join(workspace, &1 <> name)))
       end
 

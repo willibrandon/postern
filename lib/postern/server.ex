@@ -352,7 +352,11 @@ defmodule Postern.Server do
   defp opened_kind(lsp, uri, language_id) do
     with :unknown <- FileKind.detect(uri),
          :unknown <-
-           ConfigTree.kind_of(FileKind.uri_to_path(uri), reader(lsp), workspace: workspace(lsp)) do
+           ConfigTree.kind_of(
+             FileKind.canonical(FileKind.uri_to_path(uri)),
+             reader(lsp),
+             workspace: workspace(lsp)
+           ) do
       FileKind.detect(uri, language_id)
     end
   end
@@ -458,7 +462,7 @@ defmodule Postern.Server do
   defp workspace(lsp) do
     case Map.get(current_assigns(lsp), :root_uri) do
       nil -> nil
-      uri -> FileKind.uri_to_path(uri)
+      uri -> FileKind.canonical(FileKind.uri_to_path(uri))
     end
   end
 

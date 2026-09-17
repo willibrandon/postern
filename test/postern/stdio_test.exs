@@ -1,6 +1,11 @@
 defmodule Postern.StdioTest do
   use ExUnit.Case, async: false
 
+  # Both tests start the server through mix, which Windows has as mix.bat
+  # and cannot spawn as an executable. The release smoke on Windows covers
+  # the binary over stdio.
+  @moduletag :unix
+
   test "speaks initialize and shutdown over stdio" do
     mix = System.find_executable("mix")
 
@@ -47,7 +52,6 @@ defmodule Postern.StdioTest do
     Port.command(port, packet(%{"jsonrpc" => "2.0", "method" => "exit"}))
   end
 
-  @tag :unix
   test "halts as soon as the editor closes the pipe" do
     mix = System.find_executable("mix")
 

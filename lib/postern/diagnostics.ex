@@ -35,7 +35,7 @@ defmodule Postern.Diagnostics do
         []
 
       kind ->
-        path = FileKind.uri_to_path(uri)
+        path = FileKind.canonical(FileKind.uri_to_path(uri))
         {tree, other} = trees(kind, path, text, options)
 
         one_override_per_line(

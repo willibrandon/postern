@@ -30,11 +30,13 @@ defmodule Postern.Files do
           t()
   def with_documents(documents) do
     open =
-      Map.new(documents, fn {uri, document} -> {FileKind.uri_to_path(uri), document.text} end)
+      Map.new(documents, fn {uri, document} ->
+        {FileKind.canonical(FileKind.uri_to_path(uri)), document.text}
+      end)
 
     %__MODULE__{
       read: fn path ->
-        case Map.fetch(open, path) do
+        case Map.fetch(open, FileKind.canonical(path)) do
           {:ok, text} -> {:ok, text}
           :error -> read_disk(path)
         end
@@ -46,14 +48,17 @@ defmodule Postern.Files do
   @doc "A reader over files held in memory, keyed by absolute path."
   @spec in_memory(%{optional(Path.t()) => String.t()}) :: t()
   def in_memory(files) do
+    files = Map.new(files, fn {path, text} -> {FileKind.canonical(path), text} end)
+
     %__MODULE__{
       read: fn path ->
-        case Map.fetch(files, path) do
+        case Map.fetch(files, FileKind.canonical(path)) do
           {:ok, text} -> {:ok, text}
           :error -> :error
         end
       end,
       list: fn directory ->
+        directory = FileKind.canonical(directory)
         below = Enum.filter(Map.keys(files), &String.starts_with?(&1, directory <> "/"))
 
         if below == [] do

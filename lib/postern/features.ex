@@ -57,7 +57,7 @@ defmodule Postern.Features do
          {:ok, entries} = PostgresqlConf.parse(text),
          %{type: :assignment} = entry <- entry_at(entries, position),
          %{path: path, entry: winner} <- elsewhere(uri, entry, options) do
-      %Location{uri: path_to_uri(path), range: span_to_range(winner.name_span)}
+      %Location{uri: FileKind.path_to_uri(path), range: span_to_range(winner.name_span)}
     else
       _ -> nil
     end
@@ -68,7 +68,7 @@ defmodule Postern.Features do
   def document_links(uri, text, options \\ %{}) do
     with kind when kind != :unknown <- option(options, :kind) || FileKind.detect(uri),
          %Files{read: read} <- option(options, :reader) do
-      path = FileKind.uri_to_path(uri)
+      path = path_of(uri)
       {:ok, entries} = ConfigTree.parse(kind, text)
 
       for %{type: :include, directive: directive, file: file} = entry <- entries,
@@ -77,7 +77,7 @@ defmodule Postern.Features do
           match?({:ok, _text}, read.(target)) do
         %DocumentLink{
           range: span_to_range(ConfigTree.include_span(entry)),
-          target: path_to_uri(target)
+          target: FileKind.path_to_uri(target)
         }
       end
     else
@@ -185,10 +185,9 @@ defmodule Postern.Features do
 
       %{path: path, entry: winner} ->
         where =
-          if path == FileKind.uri_to_path(uri),
+          if path == path_of(uri),
             do: "line #{winner.span.line}",
-            else:
-              "`#{ConfigTree.relative(path, FileKind.uri_to_path(uri))}` line #{winner.span.line}"
+            else: "`#{ConfigTree.relative(path, path_of(uri))}` line #{winner.span.line}"
 
         "\n\n**Overridden by:** #{where}, where it is `#{winner.raw_value}`"
     end
@@ -196,7 +195,7 @@ defmodule Postern.Features do
 
   # The assignment the tree keeps for this entry's name, when it is another one.
   defp elsewhere(uri, entry, options) do
-    path = FileKind.uri_to_path(uri)
+    path = path_of(uri)
 
     with %Files{} = files <- option(options, :reader),
          tree =
@@ -211,7 +210,7 @@ defmodule Postern.Features do
     end
   end
 
-  defp path_to_uri(path), do: "file://" <> URI.encode(path)
+  defp path_of(uri), do: FileKind.canonical(FileKind.uri_to_path(uri))
 
   defp optional_detail(_label, nil), do: nil
   defp optional_detail(_label, ""), do: nil

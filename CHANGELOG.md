@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+- Paths are compared in one canonical form and a file URI carries a Windows drive the way
+  editors write it, so include trees and the file next to a document resolve on Windows too.
+  The suite runs on macOS and Windows in CI as well as Linux.
+
 ## [0.2.0] - 2026-09-17
 
 - The Zed extension takes the grammar's 0.1.1 release, in which a single quote is an ordinary

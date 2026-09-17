@@ -12,7 +12,7 @@ defmodule Postern.Parser.AuthLines do
   """
 
   @type segment :: %{offset: non_neg_integer(), line: pos_integer(), raw: String.t()}
-  @type record :: %{text: String.t(), line: pos_integer(), segments: [segment()]}
+  @type t :: %{text: String.t(), line: pos_integer(), segments: [segment()]}
   @type span :: %{
           line: pos_integer(),
           col: pos_integer(),
@@ -21,7 +21,7 @@ defmodule Postern.Parser.AuthLines do
         }
 
   @doc "Splits a file into records, joining continued lines unless told not to."
-  @spec records(String.t(), boolean()) :: [record()]
+  @spec records(String.t(), boolean()) :: [t()]
   def records(content, continuations? \\ true) do
     content
     |> String.split("\n")
@@ -31,19 +31,19 @@ defmodule Postern.Parser.AuthLines do
   end
 
   @doc "One physical line as a record of its own."
-  @spec single(String.t(), pos_integer()) :: record()
+  @spec single(String.t(), pos_integer()) :: t()
   def single(text, line),
     do: %{text: text, line: line, segments: [%{offset: 0, line: line, raw: text}]}
 
   @doc "The physical line and column of a byte offset into the record's text."
-  @spec position(record(), non_neg_integer()) :: {pos_integer(), pos_integer()}
+  @spec position(t(), non_neg_integer()) :: {pos_integer(), pos_integer()}
   def position(%{segments: segments}, offset) do
     segment = Enum.reduce(segments, hd(segments), &if(&1.offset <= offset, do: &1, else: &2))
     {segment.line, offset - segment.offset + 1}
   end
 
   @doc "The span of the whole record, or of the part from a byte offset on."
-  @spec span(record(), non_neg_integer()) :: span()
+  @spec span(t(), non_neg_integer()) :: span()
   def span(%{segments: segments} = record, from \\ 0) do
     {line, col} = position(record, from)
     last = List.last(segments)
@@ -51,7 +51,7 @@ defmodule Postern.Parser.AuthLines do
   end
 
   @doc "The span of a piece of the record, from one byte offset to another."
-  @spec span(record(), non_neg_integer(), non_neg_integer()) :: span()
+  @spec span(t(), non_neg_integer(), non_neg_integer()) :: span()
   def span(record, from, to) do
     {line, col} = position(record, from)
     {end_line, end_col} = position(record, to)
