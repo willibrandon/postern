@@ -49,6 +49,22 @@ defmodule Postern.CLITest do
     assert [%{"file" => _, "diagnostics" => [%{"message" => _}]}] = Jason.decode!(output)
   end
 
+  test "check reads the file next to the one it is given" do
+    directory = Path.join(System.tmp_dir!(), "postern-cli-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(directory)
+    on_exit(fn -> File.rm_rf!(directory) end)
+    hba_path = Path.join(directory, "pg_hba.conf")
+    ident_path = Path.join(directory, "pg_ident.conf")
+    File.write!(hba_path, "local all all peer map=missing\n")
+    File.write!(ident_path, "known root postgres\n")
+
+    output = capture_io(fn -> assert CLI.run(["check", hba_path]) == 1 end)
+    assert output =~ ~s(error: ident map "missing" does not exist in pg_ident.conf)
+
+    output = capture_io(fn -> assert CLI.run(["check", ident_path]) == 0 end)
+    assert output =~ ~s(warning: ident map "known" is never referenced)
+  end
+
   defp invalid_config_path do
     directory = Path.join(System.tmp_dir!(), "postern-cli-#{System.unique_integer([:positive])}")
     File.mkdir_p!(directory)

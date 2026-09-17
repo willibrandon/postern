@@ -40,6 +40,7 @@ defmodule Postern.Server do
   alias Postern.DocumentStore
   alias Postern.Features
   alias Postern.FileKind
+  alias Postern.Files
   alias Postern.LiveFeatures
   alias Postern.LiveOracle
 
@@ -255,6 +256,7 @@ defmodule Postern.Server do
     doc = params.text_document
     lsp = DocumentStore.put(lsp, doc.uri, doc.text, doc.version, doc.language_id)
     publish_diagnostics(lsp, doc.uri, doc.text, doc.version)
+    publish_related(lsp, doc.uri)
     {:noreply, lsp}
   end
 
@@ -271,6 +273,7 @@ defmodule Postern.Server do
     text = DocumentStore.apply_changes(current, params.content_changes)
     lsp = DocumentStore.update(lsp, uri, text, version)
     publish_diagnostics(lsp, uri, text, version)
+    publish_related(lsp, uri)
     {:noreply, lsp}
   end
 
@@ -282,6 +285,7 @@ defmodule Postern.Server do
       params: %PublishDiagnosticsParams{uri: uri, diagnostics: []}
     })
 
+    publish_related(lsp, uri)
     {:noreply, lsp}
   end
 
@@ -299,6 +303,27 @@ defmodule Postern.Server do
       }
     })
   end
+
+  # What pg_hba.conf reports depends on pg_ident.conf and the other way round,
+  # so when one changes, the other one open next to it is checked again. That
+  # covers a close as well, since the check then falls back to the disk.
+  defp publish_related(lsp, uri) do
+    directory = uri |> FileKind.uri_to_path() |> Path.dirname()
+    related = related_kinds(FileKind.detect(uri))
+
+    for {other_uri, document} <- DocumentStore.all(lsp),
+        other_uri != uri,
+        document.kind in related,
+        Path.dirname(FileKind.uri_to_path(other_uri)) == directory do
+      publish_diagnostics(lsp, other_uri, document.text, document.version)
+    end
+
+    :ok
+  end
+
+  defp related_kinds(:pg_hba_conf), do: [:pg_ident_conf]
+  defp related_kinds(:pg_ident_conf), do: [:pg_hba_conf]
+  defp related_kinds(_kind), do: []
 
   # Clients differ in which diagnostics they send back with a code action
   # request, so the trust hints in the range come from the document itself
@@ -359,20 +384,9 @@ defmodule Postern.Server do
 
   defp current_assigns(lsp), do: GenLSP.LSP.assigns(lsp)
 
-  defp document_options(lsp) do
-    documents = DocumentStore.all(lsp)
-
-    %{
-      pg_hba_text: find_document_text(documents, :pg_hba_conf),
-      pg_ident_text: find_document_text(documents, :pg_ident_conf)
-    }
-  end
-
-  defp find_document_text(documents, kind) do
-    Enum.find_value(documents, fn {uri, document} ->
-      if FileKind.detect(uri) == kind, do: document.text
-    end)
-  end
+  # The files a check reads besides the document: an open one as the editor
+  # has it, any other from the disk.
+  defp document_options(lsp), do: %{reader: Files.with_documents(DocumentStore.all(lsp))}
 
   defp client_name(%InitializeParams{client_info: %{name: name}}) when is_binary(name), do: name
   defp client_name(_params), do: "an unknown client"

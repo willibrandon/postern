@@ -388,6 +388,102 @@ defmodule Postern.ServerTest do
     end
   end
 
+  describe "the file next to the document" do
+    setup %{client: client} do
+      request(client, %{
+        "jsonrpc" => "2.0",
+        "id" => 400,
+        "method" => "initialize",
+        "params" => %{"processId" => nil, "rootUri" => nil, "capabilities" => %{}}
+      })
+
+      assert_result(400, _)
+
+      directory =
+        Path.join(System.tmp_dir!(), "postern-server-#{System.unique_integer([:positive])}")
+
+      File.mkdir_p!(directory)
+      on_exit(fn -> File.rm_rf!(directory) end)
+      %{directory: directory}
+    end
+
+    test "pg_ident.conf is read from the disk, then from the editor while it is open", %{
+      client: client,
+      directory: directory
+    } do
+      File.write!(Path.join(directory, "pg_ident.conf"), "known root postgres\n")
+      hba_uri = "file://" <> Path.join(directory, "pg_hba.conf")
+      ident_uri = "file://" <> Path.join(directory, "pg_ident.conf")
+
+      missing = fn diagnostics ->
+        for %{"message" => m} <- diagnostics, m =~ "does not exist", do: m
+      end
+
+      notify(client, %{
+        "jsonrpc" => "2.0",
+        "method" => "textDocument/didOpen",
+        "params" => %{
+          "textDocument" => %{
+            "uri" => hba_uri,
+            "languageId" => "pg-hba",
+            "version" => 1,
+            "text" => "local all all peer map=known\nlocal all all peer map=extra\n"
+          }
+        }
+      })
+
+      assert_notification("textDocument/publishDiagnostics", %{
+        "uri" => ^hba_uri,
+        "diagnostics" => from_disk
+      })
+
+      assert missing.(from_disk) == [~s(ident map "extra" does not exist in pg_ident.conf)]
+
+      notify(client, %{
+        "jsonrpc" => "2.0",
+        "method" => "textDocument/didOpen",
+        "params" => %{
+          "textDocument" => %{
+            "uri" => ident_uri,
+            "languageId" => "pg-ident",
+            "version" => 1,
+            "text" => "known root postgres\nextra root postgres\n"
+          }
+        }
+      })
+
+      assert_notification("textDocument/publishDiagnostics", %{
+        "uri" => ^ident_uri,
+        "diagnostics" => []
+      })
+
+      assert_notification("textDocument/publishDiagnostics", %{
+        "uri" => ^hba_uri,
+        "diagnostics" => from_editor
+      })
+
+      assert missing.(from_editor) == []
+
+      notify(client, %{
+        "jsonrpc" => "2.0",
+        "method" => "textDocument/didClose",
+        "params" => %{"textDocument" => %{"uri" => ident_uri}}
+      })
+
+      assert_notification("textDocument/publishDiagnostics", %{
+        "uri" => ^ident_uri,
+        "diagnostics" => []
+      })
+
+      assert_notification("textDocument/publishDiagnostics", %{
+        "uri" => ^hba_uri,
+        "diagnostics" => after_close
+      })
+
+      assert missing.(after_close) == [~s(ident map "extra" does not exist in pg_ident.conf)]
+    end
+  end
+
   describe "JSON-RPC pipe behavior" do
     test "initialize over TCP (simulates pipe) returns capabilities", %{
       server: _server,

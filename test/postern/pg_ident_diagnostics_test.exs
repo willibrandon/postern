@@ -41,6 +41,10 @@ defmodule Postern.PgIdentDiagnosticsTest do
     assert [%{message: "ident map \"md5_map\" is never referenced"}] = diagnostics
   end
 
+  test "no map is called unused without a pg_hba.conf to look at" do
+    assert Diagnostics.for_document("file:///tmp/pg_ident.conf", "admins root postgres\n") == []
+  end
+
   defp fixture!(name) do
     @fixtures
     |> Path.join(name)

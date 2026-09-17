@@ -4,6 +4,7 @@ defmodule Postern.CLI do
   """
 
   alias Postern.Diagnostics
+  alias Postern.Files
 
   @help_flags ~w(--help -h help)
   @version_flags ~w(--version -v version)
@@ -66,28 +67,11 @@ defmodule Postern.CLI do
     case File.read(path) do
       {:ok, text} ->
         uri = "file://" <> path
-        options = sibling_options(path)
-        %{file: file, diagnostics: Diagnostics.for_document(uri, text, options)}
+        %{file: file, diagnostics: Diagnostics.for_document(uri, text, %{reader: Files.disk()})}
 
       {:error, reason} ->
         %{file: file, diagnostics: [], error: "#{file}: #{:file.format_error(reason)}"}
     end
-  end
-
-  defp sibling_options(path) do
-    dir = Path.dirname(path)
-    options = %{}
-
-    case File.read(Path.join(dir, "pg_hba.conf")) do
-      {:ok, text} -> Map.put(options, :pg_hba_text, text)
-      _ -> options
-    end
-    |> then(fn options ->
-      case File.read(Path.join(dir, "pg_ident.conf")) do
-        {:ok, text} -> Map.put(options, :pg_ident_text, text)
-        _ -> options
-      end
-    end)
   end
 
   defp print_results(results, true) do

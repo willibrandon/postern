@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- A check on `pg_hba.conf` reads the `pg_ident.conf` next to it, and the other way round: from
+  the editor while the file is open, from the disk otherwise. A map no longer shows as missing
+  or unused because of which files happen to be open, and when one of the two changes the other
+  is checked again. Without the other file there to look at, map names are not checked at all.
 - Every option on a `pg_hba.conf` rule is checked against the connection type, the method and
   the target PostgreSQL version the way hba.c checks it, with the messages `pg_hba_file_rules`
   reports, and the problem is marked on the option. `map=` on a peer, cert, gss, sspi or oauth

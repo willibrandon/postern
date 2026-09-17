@@ -26,8 +26,8 @@ defmodule Postern.PgHbaDiagnostics do
   @doc """
   Returns diagnostics for a `pg_hba.conf` document.
 
-  `ident_text` is optional and is used to validate `map=` references when the
-  corresponding `pg_ident.conf` document is open. `options` may carry
+  `ident_text` is the `pg_ident.conf` that goes with the file, when there is
+  one to look at; without it `map=` names are not checked. `options` may carry
   `:report_trust` and the target PostgreSQL major version as `:version`;
   without one, the version comes from a `# postern: pg=N` comment or the
   newest catalog.
@@ -174,6 +174,8 @@ defmodule Postern.PgHbaDiagnostics do
     host = address |> String.split("/") |> hd()
     host in ~w(127.0.0.1 ::1 localhost samehost) or String.starts_with?(host, "127.")
   end
+
+  defp ident_reference_diagnostics(_rule, nil, _version), do: []
 
   defp ident_reference_diagnostics(
          %{auth_method: method, options: options} = rule,
@@ -351,7 +353,7 @@ defmodule Postern.PgHbaDiagnostics do
   defp target_version(text, options),
     do: Postern.PostgresqlConfDiagnostics.target_version(text, options)
 
-  defp ident_maps(nil), do: MapSet.new()
+  defp ident_maps(nil), do: nil
 
   defp ident_maps(text) do
     {:ok, entries} = PgIdent.parse(text)

@@ -167,6 +167,14 @@ defmodule Postern.PgHbaDiagnosticsTest do
            ]
   end
 
+  test "map names are checked only when pg_ident.conf is there to look at" do
+    text = "local all all peer map=admins\n"
+    missing = &String.contains?(&1.message, "does not exist in pg_ident.conf")
+
+    refute Enum.any?(Postern.PgHbaDiagnostics.diagnostics(text), missing)
+    assert Enum.any?(Postern.PgHbaDiagnostics.diagnostics(text, ""), missing)
+  end
+
   defp fixture!(name) do
     @fixtures
     |> Path.join(name)

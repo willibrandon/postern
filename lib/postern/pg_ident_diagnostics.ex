@@ -15,7 +15,9 @@ defmodule Postern.PgIdentDiagnostics do
   @doc """
   Produces parser diagnostics and warnings for maps never referenced by HBA.
 
-  `options` may carry the target PostgreSQL major version as `:version`.
+  `hba_text` is the `pg_hba.conf` that goes with the file, when there is one
+  to look at; without it no map is called unused. `options` may carry the
+  target PostgreSQL major version as `:version`.
   """
   @spec diagnostics(String.t(), String.t() | nil, map()) :: [Diagnostic.t()]
   def diagnostics(text, hba_text \\ nil, options \\ %{}) when is_binary(text) do
@@ -28,23 +30,24 @@ defmodule Postern.PgIdentDiagnostics do
         _ -> []
       end)
 
-    referenced = referenced_maps(hba_text, version)
+    parser_diagnostics ++ unused_diagnostics(entries, referenced_maps(hba_text, version))
+  end
 
-    unused_diagnostics =
-      entries
-      |> Enum.filter(&(&1.type == :mapping))
-      |> Enum.reject(&MapSet.member?(referenced, &1.map))
-      |> Enum.map(
-        &diagnostic(&1.map_span, @warning, "ident map #{inspect(&1.map)} is never referenced")
-      )
+  defp unused_diagnostics(_entries, nil), do: []
 
-    parser_diagnostics ++ unused_diagnostics
+  defp unused_diagnostics(entries, referenced) do
+    entries
+    |> Enum.filter(&(&1.type == :mapping))
+    |> Enum.reject(&MapSet.member?(referenced, &1.map))
+    |> Enum.map(
+      &diagnostic(&1.map_span, @warning, "ident map #{inspect(&1.map)} is never referenced")
+    )
   end
 
   defp target_version(text, options),
     do: Postern.PostgresqlConfDiagnostics.target_version(text, options)
 
-  defp referenced_maps(nil, _version), do: MapSet.new()
+  defp referenced_maps(nil, _version), do: nil
 
   defp referenced_maps(text, version) do
     {:ok, entries} = PgHba.parse(text)
