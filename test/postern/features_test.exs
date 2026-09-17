@@ -63,6 +63,38 @@ defmodule Postern.FeaturesTest do
     assert Enum.any?(method_items, &(&1.label == "reject"))
   end
 
+  test "pg_hba.conf completion offers the options the rule's method takes" do
+    labels = fn text ->
+      Features.completion(
+        "file:///tmp/pg_hba.conf",
+        text,
+        %Position{line: 0, character: String.length(text)}
+      ).items
+      |> Enum.map(& &1.label)
+    end
+
+    assert labels.("host all all 10.0.0.0/8 ldap ") ==
+             ~w(ldapurl ldaptls ldapscheme ldapserver ldapport ldapbinddn ldapbindpasswd ldapsearchattribute ldapsearchfilter ldapbasedn ldapprefix ldapsuffix)
+
+    assert labels.("hostssl all all 10.0.0.0/8 cert ") == ~w(clientcert clientname map)
+    assert labels.("local all all peer ") == ~w(map)
+    assert labels.("local all all peer map=x ") == ~w(map)
+    assert labels.("host all all 10.0.0.0/8 md5 ") == []
+
+    assert labels.("host all all 10.0.0.0/8 oauth ") ==
+             ~w(map issuer scope validator delegate_ident_mapping)
+
+    old =
+      Features.completion(
+        "file:///tmp/pg_hba.conf",
+        "# postern: pg=13\nhostssl all all 10.0.0.0/8 cert ",
+        %Position{line: 1, character: 32}
+      ).items
+      |> Enum.map(& &1.label)
+
+    assert old == ~w(clientcert map)
+  end
+
   test "live HBA completion includes database and role names" do
     snapshot = %{databases: [%{"datname" => "billing"}], roles: [%{"rolname" => "app_user"}]}
 

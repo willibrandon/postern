@@ -12,6 +12,7 @@ defmodule Postern.PgHbaDiagnostics do
   alias GenLSP.Structures.Range
   alias Postern.Parser.PgHba
   alias Postern.Parser.PgIdent
+  alias Postern.PgHbaOptions
 
   import Bitwise
 
@@ -26,15 +27,19 @@ defmodule Postern.PgHbaDiagnostics do
   Returns diagnostics for a `pg_hba.conf` document.
 
   `ident_text` is optional and is used to validate `map=` references when the
-  corresponding `pg_ident.conf` document is open.
+  corresponding `pg_ident.conf` document is open. `options` may carry
+  `:report_trust` and the target PostgreSQL major version as `:version`;
+  without one, the version comes from a `# postern: pg=N` comment or the
+  newest catalog.
   """
-  @spec diagnostics(String.t(), String.t() | nil) :: [Diagnostic.t()]
+  @spec diagnostics(String.t(), String.t() | nil, map()) :: [Diagnostic.t()]
   def diagnostics(text, ident_text \\ nil, options \\ %{}) when is_binary(text) do
     {:ok, entries} = PgHba.parse(text)
     parse_diagnostics = parser_diagnostics(entries)
     rules = Enum.filter(entries, &(&1.type == :rule))
     maps = ident_maps(ident_text)
     report_trust = Map.get(options, :report_trust, true)
+    version = Map.get(options, :version) || target_version(text, options)
 
     rule_diagnostics =
       rules
@@ -43,9 +48,9 @@ defmodule Postern.PgHbaDiagnostics do
         previous = Enum.take(rules, index)
 
         address_diagnostics(rule) ++
-          option_diagnostics(rule) ++
+          option_diagnostics(rule, version) ++
           unsafe_method_diagnostics(rule, report_trust) ++
-          ident_reference_diagnostics(rule, maps) ++
+          ident_reference_diagnostics(rule, maps, version) ++
           shadow_diagnostics(rule, previous)
       end)
 
@@ -123,26 +128,24 @@ defmodule Postern.PgHbaDiagnostics do
     end
   end
 
-  defp option_diagnostics(%{connection_type: "local", options: options, span: span}) do
-    if Map.has_key?(options, "clientcert") do
-      [diagnostic(span, @error, "clientcert is not valid on a local rule")]
-    else
-      []
-    end
+  # Each option is checked against the rule's connection type and method the
+  # way hba.c checks it, and reported on the option itself.
+  defp option_diagnostics(
+         %{connection_type: type, auth_method: method, options: options} = rule,
+         version
+       ) do
+    Enum.flat_map(options, fn {name, value} ->
+      case PgHbaOptions.check(name, value, type, method, version) do
+        :ok -> []
+        {:error, message} -> [diagnostic(option_span(rule, name), @error, message)]
+      end
+    end)
   end
 
-  defp option_diagnostics(%{auth_method: method, options: options, span: span}) do
-    if method != "ldap" and Enum.any?(Map.keys(options), &String.starts_with?(&1, "ldap")) do
-      [
-        diagnostic(
-          span,
-          @error,
-          "ldap options are only valid with the ldap authentication method"
-        )
-      ]
-    else
-      []
-    end
+  defp option_span(%{tokens: tokens, span: span}, name) do
+    Enum.find_value(tokens, span, fn token ->
+      if token.raw == name or String.starts_with?(token.raw, name <> "="), do: token.span
+    end)
   end
 
   # A deliberate choice on many development setups, so this is advice rather
@@ -172,21 +175,25 @@ defmodule Postern.PgHbaDiagnostics do
     host in ~w(127.0.0.1 ::1 localhost samehost) or String.starts_with?(host, "127.")
   end
 
-  defp ident_reference_diagnostics(%{auth_method: "ident", options: options, span: span}, maps) do
-    case Map.get(options, "map") do
-      nil ->
-        []
-
-      map ->
-        if MapSet.member?(maps, map) do
-          []
-        else
-          [diagnostic(span, @error, "ident map #{inspect(map)} does not exist in pg_ident.conf")]
-        end
+  defp ident_reference_diagnostics(
+         %{auth_method: method, options: options} = rule,
+         maps,
+         version
+       ) do
+    with true <- method in PgHbaOptions.map_methods(version),
+         map when is_binary(map) <- Map.get(options, "map"),
+         false <- MapSet.member?(maps, map) do
+      [
+        diagnostic(
+          option_span(rule, "map"),
+          @error,
+          "ident map #{inspect(map)} does not exist in pg_ident.conf"
+        )
+      ]
+    else
+      _ -> []
     end
   end
-
-  defp ident_reference_diagnostics(_rule, _maps), do: []
 
   defp shadow_diagnostics(_rule, []), do: []
 
@@ -338,6 +345,11 @@ defmodule Postern.PgHbaDiagnostics do
       :error
     end
   end
+
+  # The version comes from the options or a `# postern: pg=N` comment in the
+  # file, the same way it does for postgresql.conf.
+  defp target_version(text, options),
+    do: Postern.PostgresqlConfDiagnostics.target_version(text, options)
 
   defp ident_maps(nil), do: MapSet.new()
 

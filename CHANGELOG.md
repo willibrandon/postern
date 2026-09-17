@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+- Every option on a `pg_hba.conf` rule is checked against the connection type, the method and
+  the target PostgreSQL version the way hba.c checks it, with the messages `pg_hba_file_rules`
+  reports, and the problem is marked on the option. `map=` on a peer, cert, gss, sspi or oauth
+  rule is now looked up in `pg_ident.conf`, and the map it names no longer shows as unused
+  there. Completion offers the options the rule's method takes.
 - The Zed extension is `postgresql-conf`, the id Zed's guidelines give a language extension, carries
   its own license and references the grammar's 0.1.0 release, ready for the extension registry.
 - An Emacs package in `editors/emacs`: a tree-sitter major mode for the four files with Imenu and

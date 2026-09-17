@@ -20,12 +20,12 @@ defmodule Postern.Features do
   alias Postern.Catalog
   alias Postern.FileKind
   alias Postern.Parser.PostgresqlConf
+  alias Postern.PgHbaOptions
 
   @connection_types ~w(local host hostssl hostnossl hostgssenc hostnogssenc)
   @auth_methods ~w(trust reject scram-sha-256 md5 password gss sspi ident peer ldap radius cert pam bsd oauth)
   @address_keywords ~w(all samehost samenet)
   @boolean_values ~w(on off true false yes no 1 0)
-  @hba_options ~w(clientcert map ldapserver ldapport ldapscheme ldapbasedn ldapbinddn ldapbindpasswd ldapsearchattribute ldapsearchfilter ldaptls)
 
   @doc "Returns hover information for a document position, or `nil`."
   @spec hover(String.t(), String.t(), Position.t(), map() | keyword()) :: Hover.t() | nil
@@ -199,7 +199,8 @@ defmodule Postern.Features do
     complete_fields =
       if String.ends_with?(before, [" ", "\t"]), do: fields, else: Enum.drop(fields, -1)
 
-    candidates = hba_candidates(complete_fields, live_values(options))
+    version = Postern.PostgresqlConfDiagnostics.target_version(text, options, Catalog.versions())
+    candidates = hba_candidates(complete_fields, live_values(options), version)
 
     candidates
     |> Enum.uniq()
@@ -207,23 +208,32 @@ defmodule Postern.Features do
     |> Enum.map(&completion_item(&1, CompletionItemKind.keyword(), "pg_hba.conf"))
   end
 
-  defp hba_candidates([], _live), do: @connection_types
-  defp hba_candidates([_type], live), do: ~w(all sameuser samerole replication) ++ live.databases
-  defp hba_candidates(["local", _database, _user], _live), do: @auth_methods
+  defp hba_candidates([], _live, _version), do: @connection_types
 
-  defp hba_candidates([type, _database, _user], _live) when type in @connection_types,
-    do: @address_keywords
+  defp hba_candidates([_type], live, _version),
+    do: ~w(all sameuser samerole replication) ++ live.databases
 
-  defp hba_candidates([type, _database], live) when type in @connection_types,
+  defp hba_candidates([type, _database], live, _version) when type in @connection_types,
     do: ~w(all +group) ++ live.roles
 
-  defp hba_candidates([type, _database, _user, _address], _live) when type in @connection_types,
-    do: @auth_methods
+  defp hba_candidates(["local", _database, _user], _live, _version), do: @auth_methods
 
-  defp hba_candidates([_type, _database, _user, _address, _method], _live), do: @hba_options
+  defp hba_candidates(["local", _database, _user, method | _options], _live, version),
+    do: PgHbaOptions.for_rule("local", method, version)
 
-  defp hba_candidates(_fields, _live),
-    do: @connection_types ++ @auth_methods ++ @address_keywords ++ @hba_options
+  defp hba_candidates([type, _database, _user], _live, _version) when type in @connection_types,
+    do: @address_keywords
+
+  defp hba_candidates([type, _database, _user, _address], _live, _version)
+       when type in @connection_types,
+       do: @auth_methods
+
+  defp hba_candidates([type, _database, _user, _address, method | _options], _live, version)
+       when type in @connection_types,
+       do: PgHbaOptions.for_rule(type, method, version)
+
+  defp hba_candidates(_fields, _live, version),
+    do: @connection_types ++ @auth_methods ++ @address_keywords ++ PgHbaOptions.all(version)
 
   defp live_values(options) do
     case option(options, :live_snapshot) do

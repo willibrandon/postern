@@ -36,7 +36,10 @@ defmodule Postern.Diagnostics do
           Postern.PgHbaDiagnostics.diagnostics(
             text,
             option(initialization_options, :pg_ident_text),
-            %{report_trust: option(initialization_options, :reportTrust) != false}
+            %{
+              report_trust: option(initialization_options, :reportTrust) != false,
+              version: target_version(text, initialization_options)
+            }
           )
 
         offline ++
@@ -51,7 +54,8 @@ defmodule Postern.Diagnostics do
         offline =
           Postern.PgIdentDiagnostics.diagnostics(
             text,
-            option(initialization_options, :pg_hba_text)
+            option(initialization_options, :pg_hba_text),
+            %{version: target_version(text, initialization_options)}
           )
 
         offline ++
@@ -66,6 +70,11 @@ defmodule Postern.Diagnostics do
         []
     end
   end
+
+  # The version comes from the `pg` option or a `# postern: pg=N` comment in
+  # any of the files, the same way it does for postgresql.conf.
+  defp target_version(text, options),
+    do: Postern.PostgresqlConfDiagnostics.target_version(text, options)
 
   defp option(options, key) when is_map(options), do: options[key] || options[Atom.to_string(key)]
   defp option(options, key) when is_list(options), do: Keyword.get(options, key)
