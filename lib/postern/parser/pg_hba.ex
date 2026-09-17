@@ -390,9 +390,14 @@ defmodule Postern.Parser.PgHba do
   defp split_outside_quotes(<<c::utf8, rest::binary>>, current, acc, in_quote),
     do: split_outside_quotes(rest, current <> <<c::utf8>>, acc, in_quote)
 
+  # An option field is a list like any other, so a comma outside quotes
+  # starts another option, which then has to be name=value on its own; a
+  # list meant as one value, such as radiusservers, is quoted. An option
+  # without a value is kept as `true` for the checks to refuse.
   defp parse_options(opts, _raw_line, _line_no) do
-    # Options are name=value
-    Enum.reduce(opts, %{}, fn opt, acc ->
+    opts
+    |> Enum.flat_map(&split_outside_quotes(&1, "", [], false))
+    |> Enum.reduce(%{}, fn opt, acc ->
       case String.split(opt, "=", parts: 2) do
         [k, v] -> Map.put(acc, k, unquote_token(v))
         [k] -> Map.put(acc, k, true)

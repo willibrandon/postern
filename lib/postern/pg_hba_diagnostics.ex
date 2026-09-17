@@ -71,7 +71,8 @@ defmodule Postern.PgHbaDiagnostics do
     address_advice(rule) ++
       case method_diagnostics(rule, version) do
         [] ->
-          option_diagnostics(rule, version) ++
+          load_errors(rule, version) ++
+            ident_on_local_hint(rule) ++
             unsafe_method_diagnostics(rule, report_trust) ++
             ident_reference_diagnostics(rule, maps, version) ++
             shadow_diagnostics(rule, path, previous) ++
@@ -81,6 +82,189 @@ defmodule Postern.PgHbaDiagnostics do
           invalid_method
       end
   end
+
+  # What the server refuses when it loads the rule, in the order it looks:
+  # the method against the connection type, then each option, then the
+  # arguments the method needs. It stops at the first, and so does this.
+  defp load_errors(rule, version) do
+    [
+      combination_diagnostics(rule),
+      option_diagnostics(rule, version),
+      argument_diagnostics(rule, version)
+    ]
+    |> Enum.find([], &(&1 != []))
+  end
+
+  # gssapi cannot serve a local socket, peer serves nothing else, and cert
+  # needs a connection with a client certificate to look at.
+  defp combination_diagnostics(%{connection_type: type, auth_method: method, method_span: span}) do
+    cond do
+      type == "local" and method == "gss" ->
+        [diagnostic(span, @error, "gssapi authentication is not supported on local sockets")]
+
+      type != "local" and method == "peer" ->
+        [diagnostic(span, @error, "peer authentication is only supported on local sockets")]
+
+      type != "hostssl" and method == "cert" ->
+        [diagnostic(span, @error, "cert authentication is only supported on hostssl connections")]
+
+      true ->
+        []
+    end
+  end
+
+  # ident on a local socket has meant peer for a long time, and the server
+  # swaps it in without a word.
+  defp ident_on_local_hint(%{connection_type: "local", auth_method: "ident", method_span: span}),
+    do: [diagnostic(span, @hint, ~s(on a local socket the server reads "ident" as "peer"))]
+
+  defp ident_on_local_hint(_rule), do: []
+
+  # The arguments a method needs, checked once the options are all valid.
+  defp argument_diagnostics(%{auth_method: "ldap", options: options, span: span}, version),
+    do: ldap_arguments(options, span, version)
+
+  defp argument_diagnostics(%{auth_method: "radius", options: options, span: span}, _version),
+    do: radius_arguments(options, span)
+
+  defp argument_diagnostics(%{auth_method: "oauth", options: options, span: span}, _version),
+    do: oauth_arguments(options, span)
+
+  defp argument_diagnostics(_rule, _version), do: []
+
+  # ldap binds simply, with ldapprefix or ldapsuffix, or searches first,
+  # with ldapbasedn, never both, and searches by an attribute or a filter,
+  # never both. ldapserver is left alone: a build with OpenLDAP can find the
+  # server through DNS and does not insist on it.
+  defp ldap_arguments(options, span, version) do
+    case ldap_shape(options) do
+      :mixed ->
+        [diagnostic(span, @error, ldap_mix_message(version))]
+
+      :unbound ->
+        [
+          diagnostic(
+            span,
+            @error,
+            ~s(authentication method "ldap" requires argument "ldapbasedn", "ldapprefix", or "ldapsuffix" to be set)
+          )
+        ]
+
+      :two_searches ->
+        [
+          diagnostic(
+            span,
+            @error,
+            "cannot use ldapsearchattribute together with ldapsearchfilter"
+          )
+        ]
+
+      :fine ->
+        []
+    end
+  end
+
+  defp ldap_shape(options) do
+    {url_basedn?, url_attribute?} = ldapurl_parts(options["ldapurl"])
+    simple? = any?(options, ~w(ldapprefix ldapsuffix))
+
+    search? =
+      any?(options, ~w(ldapbasedn ldapbinddn ldapbindpasswd ldapsearchattribute ldapsearchfilter))
+
+    basedn? = url_basedn? or any?(options, ~w(ldapbasedn))
+    attribute? = url_attribute? or any?(options, ~w(ldapsearchattribute))
+
+    case {simple?, search?, basedn?, attribute? and any?(options, ~w(ldapsearchfilter))} do
+      {true, true, _basedn?, _both?} -> :mixed
+      {false, _search?, false, _both?} -> :unbound
+      {_simple?, _search?, _basedn?, true} -> :two_searches
+      _shape -> :fine
+    end
+  end
+
+  defp any?(options, names), do: Enum.any?(names, &Map.has_key?(options, &1))
+
+  # radius needs its servers and secrets, and the secrets, ports and
+  # identifiers are one each or one per server.
+  defp radius_arguments(options, span) do
+    cond do
+      not Map.has_key?(options, "radiusservers") -> [requires("radius", "radiusservers", span)]
+      not Map.has_key?(options, "radiussecrets") -> [requires("radius", "radiussecrets", span)]
+      true -> radius_lists(options, length(list(options["radiusservers"])), span)
+    end
+  end
+
+  defp radius_lists(options, servers, span) do
+    Enum.find_value(~w(secrets ports identifiers), [], fn what ->
+      count = length(list(options["radius" <> what]))
+
+      if Map.has_key?(options, "radius" <> what) and count != 1 and count != servers do
+        [
+          diagnostic(
+            span,
+            @error,
+            "the number of RADIUS #{what} (#{count}) must be 1 or the same as the number of RADIUS servers (#{servers})"
+          )
+        ]
+      end
+    end)
+  end
+
+  defp oauth_arguments(options, span) do
+    cond do
+      not Map.has_key?(options, "scope") ->
+        [requires("oauth", "scope", span)]
+
+      not Map.has_key?(options, "issuer") ->
+        [requires("oauth", "issuer", span)]
+
+      options["delegate_ident_mapping"] == "1" and Map.has_key?(options, "map") ->
+        [
+          diagnostic(
+            span,
+            @error,
+            "map cannot be used in combination with delegate_ident_mapping"
+          )
+        ]
+
+      true ->
+        []
+    end
+  end
+
+  defp requires(method, argument, span) do
+    diagnostic(
+      span,
+      @error,
+      ~s(authentication method "#{method}" requires argument "#{argument}" to be set)
+    )
+  end
+
+  # 18 reworded the message; the rule is the same.
+  defp ldap_mix_message(version) when version >= 18,
+    do: "cannot mix options for simple bind and search+bind modes"
+
+  defp ldap_mix_message(_version),
+    do:
+      "cannot use ldapbasedn, ldapbinddn, ldapbindpasswd, ldapsearchattribute, ldapsearchfilter, or ldapurl together with ldapprefix"
+
+  # An ldapurl sets the base DN, even to nothing, and the attribute after
+  # its first question mark, ldap://host/dc=x?uid?sub, counts as
+  # ldapsearchattribute.
+  defp ldapurl_parts(url) when is_binary(url) do
+    case Regex.run(~r{^ldaps?://[^/]*/[^?]*\?([^?]*)}, url) do
+      [_, attribute] -> {true, attribute != ""}
+      nil -> {true, false}
+    end
+  end
+
+  defp ldapurl_parts(_other), do: {false, false}
+
+  # A comma-separated list the way SplitGUCList reads one.
+  defp list(value) when is_binary(value),
+    do: value |> String.split(",") |> Enum.map(&String.trim/1) |> Enum.reject(&(&1 == ""))
+
+  defp list(_other), do: []
 
   defp method_diagnostics(%{auth_method: method, method_span: span}, version) do
     if method in PgHbaOptions.methods(version),
@@ -171,7 +355,9 @@ defmodule Postern.PgHbaDiagnostics do
 
   defp option_span(%{tokens: tokens, span: span}, name) do
     Enum.find_value(tokens, span, fn token ->
-      if token.raw == name or String.starts_with?(token.raw, name <> "="), do: token.span
+      if token.raw == name or String.starts_with?(token.raw, name <> "=") or
+           String.contains?(token.raw, "," <> name),
+         do: token.span
     end)
   end
 

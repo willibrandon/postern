@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+- A `pg_hba.conf` rule is checked as a whole the way hba.c checks it once its options are read:
+  gssapi on a local socket, peer anywhere else and cert without hostssl are errors, ldap must
+  choose between a simple bind and search+bind and take one of ldapsearchattribute and
+  ldapsearchfilter, radius needs its servers and secrets with lists that fit, and oauth needs an
+  issuer and a scope and no map next to delegate_ident_mapping, each in the server's words for
+  the target version. A comma in an option field starts another option, as it does for the
+  server, so a list meant as one value is quoted. ident on a local socket gets a hint that the
+  server reads it as peer.
 - A `pg_hba.conf` rule is read field by field the way hba.c reads it, so a line that ends too
   soon, a list where one value belongs, a host name with a CIDR mask, a mask that does not fit
   its address and a method the target version does not know are the server's errors in its

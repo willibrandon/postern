@@ -226,6 +226,71 @@ defmodule Postern.PgHbaDiagnosticsTest do
     assert errors.("# postern: pg=16\n" <> newer) == []
   end
 
+  test "checks the method against the connection type and the arguments it needs" do
+    errors = fn text ->
+      text
+      |> Postern.PgHbaDiagnostics.diagnostics()
+      |> Enum.filter(&(&1.severity == 1))
+      |> Enum.map(& &1.message)
+    end
+
+    refused = [
+      {"local all all gss", "gssapi authentication is not supported on local sockets"},
+      {"host all all 10.0.0.0/8 peer", "peer authentication is only supported on local sockets"},
+      {"host all all 10.0.0.0/8 cert",
+       "cert authentication is only supported on hostssl connections"},
+      {"host all all 10.0.0.0/8 ldap ldapserver=x",
+       ~s(authentication method "ldap" requires argument "ldapbasedn", "ldapprefix", or "ldapsuffix" to be set)},
+      {"host all all 10.0.0.0/8 ldap ldapserver=x ldapprefix=cn= ldapbasedn=dc=x",
+       "cannot mix options for simple bind and search+bind modes"},
+      {"host all all 10.0.0.0/8 ldap ldapbasedn=dc=x ldapsearchattribute=uid ldapsearchfilter=(uid=$username)",
+       "cannot use ldapsearchattribute together with ldapsearchfilter"},
+      {"host all all 10.0.0.0/8 ldap ldapurl=ldap://x/dc=x?uid?sub ldapsearchfilter=(uid=$username)",
+       "cannot use ldapsearchattribute together with ldapsearchfilter"},
+      {"host all all 10.0.0.0/8 radius",
+       ~s(authentication method "radius" requires argument "radiusservers" to be set)},
+      {~s(host all all 10.0.0.0/8 radius radiusservers="a,b"),
+       ~s(authentication method "radius" requires argument "radiussecrets" to be set)},
+      {~s(host all all 10.0.0.0/8 radius radiusservers="a,b" radiussecrets="s1,s2,s3"),
+       "the number of RADIUS secrets (3) must be 1 or the same as the number of RADIUS servers (2)"},
+      {~s(host all all 10.0.0.0/8 radius radiusservers="a,b" radiussecrets=s radiusports="1,2,3"),
+       "the number of RADIUS ports (3) must be 1 or the same as the number of RADIUS servers (2)"},
+      {"host all all 10.0.0.0/8 radius radiusservers=a,b radiussecrets=s",
+       "authentication option not in name=value format: b"},
+      {"host all all 10.0.0.0/8 oauth issuer=https://x",
+       ~s(authentication method "oauth" requires argument "scope" to be set)},
+      {"host all all 10.0.0.0/8 oauth scope=openid",
+       ~s(authentication method "oauth" requires argument "issuer" to be set)},
+      {"host all all 10.0.0.0/8 oauth issuer=https://x scope=openid map=m delegate_ident_mapping=1",
+       "map cannot be used in combination with delegate_ident_mapping"}
+    ]
+
+    for {line, message} <- refused, do: assert(errors.(line <> "\n") == [message], line)
+
+    accepted = [
+      "hostssl all all 10.0.0.0/8 cert",
+      "local all all peer",
+      "host all all 10.0.0.0/8 ldap ldapurl=ldap://x/",
+      ~s(host all all 10.0.0.0/8 ldap ldapprefix=cn= ldapsuffix=",dc=x"),
+      ~s(host all all 10.0.0.0/8 radius radiusservers="a,b" radiussecrets="s1,s2" radiusports=1812),
+      "host all all 10.0.0.0/8 oauth issuer=https://x scope=openid map=m"
+    ]
+
+    for line <- accepted, do: assert(errors.(line <> "\n") == [], line)
+
+    # 17 words the ldap rule differently.
+    assert errors.(
+             "# postern: pg=17\nhost all all 10.0.0.0/8 ldap ldapserver=x ldapprefix=cn= ldapbasedn=dc=x\n"
+           ) == [
+             "cannot use ldapbasedn, ldapbinddn, ldapbindpasswd, ldapsearchattribute, ldapsearchfilter, or ldapurl together with ldapprefix"
+           ]
+
+    assert [%{severity: 4, message: hint}] =
+             Postern.PgHbaDiagnostics.diagnostics("local all all ident\n")
+
+    assert hint == ~s(on a local socket the server reads "ident" as "peer")
+  end
+
   defp fixture!(name) do
     @fixtures
     |> Path.join(name)

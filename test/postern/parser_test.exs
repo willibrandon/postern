@@ -166,6 +166,13 @@ defmodule Postern.ParserTest do
 
       assert %{address_kind: :cidr, auth_method: "scram-sha-256-plus", method_span: %{col: 25}} =
                shape.("host all all 10.0.0.0/8 scram-sha-256-plus")
+
+      # An option field is a list too, so a list meant as one value is quoted.
+      assert %{options: %{"radiusservers" => "a", "b" => true}} =
+               shape.("host all all 10.0.0.0/8 radius radiusservers=a,b")
+
+      assert %{options: %{"radiusservers" => "a,b"}} =
+               shape.(~s(host all all 10.0.0.0/8 radius radiusservers="a,b"))
     end
   end
 
