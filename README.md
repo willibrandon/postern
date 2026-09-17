@@ -70,6 +70,15 @@ Install [editors/zed](editors/zed) as a dev extension. It highlights the four fi
 the server for your platform when `postern` is not on your `PATH`. See
 [editors/zed/README.md](editors/zed/README.md).
 
+### Other file names
+
+Every package claims the four files by name, `postgresql.base.conf`, which Patroni keeps the
+original file as, and a `.conf` file under a `conf.d` directory below a `postgresql` directory,
+which is how Debian lays out an `include_dir`. Zed matches names rather than patterns, so there
+the `conf.d` glob is a `file_types` setting. Neovim, Emacs and Zed also take a file whose first
+line is a `# postern:` comment. For another layout, tell the editor the file is `postgresql-conf`,
+`pg-hba` or `pg-ident` and the server takes its word for it.
+
 ## Command line
 
 ```sh

@@ -22,10 +22,27 @@
   (get-text-property (match-beginning 0) 'face))
 
 (ert-deftest postgresql-conf-ts-mode-owns-the-four-file-names ()
-  (dolist (name '("postgresql.conf" "postgresql.auto.conf" "pg_hba.conf" "pg_ident.conf"))
+  (dolist (name '("postgresql.conf" "postgresql.auto.conf" "postgresql.base.conf"
+                  "pg_hba.conf" "pg_ident.conf"))
     (should (eq (assoc-default (concat "/etc/postgresql/" name) auto-mode-alist #'string-match-p)
                 'postgresql-conf-ts-mode)))
   (should-not (eq (assoc-default "/etc/nginx/nginx.conf" auto-mode-alist #'string-match-p)
+                  'postgresql-conf-ts-mode)))
+
+(ert-deftest postgresql-conf-ts-mode-owns-an-include-dir-under-postgresql ()
+  (should (eq (assoc-default "/etc/postgresql/16/main/conf.d/10-memory.conf"
+                             auto-mode-alist #'string-match-p)
+              'postgresql-conf-ts-mode))
+  (should-not (eq (assoc-default "/etc/nginx/conf.d/default.conf" auto-mode-alist #'string-match-p)
+                  'postgresql-conf-ts-mode))
+  (should-not (eq (assoc-default "/etc/postgresql/16/main/conf.d/notes.txt"
+                                 auto-mode-alist #'string-match-p)
+                  'postgresql-conf-ts-mode)))
+
+(ert-deftest postgresql-conf-ts-mode-owns-a-file-that-starts-with-a-postern-comment ()
+  (should (eq (assoc-default "# postern: pg=16\nport = 5432\n" magic-mode-alist #'string-match-p)
+              'postgresql-conf-ts-mode))
+  (should-not (eq (assoc-default "port = 5432\n# postern: pg=16\n" magic-mode-alist #'string-match-p)
                   'postgresql-conf-ts-mode)))
 
 (ert-deftest postgresql-conf-ts-mode-parses-and-highlights-a-rule ()

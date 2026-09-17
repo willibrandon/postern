@@ -10,7 +10,13 @@ const manifest = JSON.parse(read("package.json"));
 const language = manifest.fresh.languages[0];
 const plugin = read(manifest.fresh.plugins[0].entry);
 const GRAMMAR = "grammars/postgresql-conf.sublime-syntax";
-const FILENAMES = ["postgresql.conf", "postgresql.auto.conf", "pg_hba.conf", "pg_ident.conf"];
+const FILENAMES = [
+  "postgresql.conf",
+  "postgresql.auto.conf",
+  "postgresql.base.conf",
+  "pg_hba.conf",
+  "pg_ident.conf",
+];
 
 test("the manifest is a bundle with one language served by postern", () => {
   assert.equal(manifest.type, "bundle");
@@ -44,9 +50,10 @@ test("the plugin offers the trust hint as a setting", () => {
   assert.ok(plugin.includes('editor.on("config_changed"'));
 });
 
-test("the plugin claims the four file names for the language", () => {
+test("the plugin claims the file names and the include_dir pattern for the language", () => {
   assert.ok(plugin.includes('"postgresql-conf"'));
   for (const name of FILENAMES) {
     assert.ok(plugin.includes(`"${name}"`), name);
   }
+  assert.ok(plugin.includes('"**/postgresql/**/conf.d/*.conf"'));
 });

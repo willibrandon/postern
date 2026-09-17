@@ -22,6 +22,25 @@ defmodule Postern.FileKindTest do
       assert FileKind.detect("file:///etc/pg_ident.conf") == :pg_ident_conf
     end
 
+    test "postgresql.base.conf, which Patroni keeps the original file as" do
+      assert FileKind.detect("file:///var/lib/postgresql/data/postgresql.base.conf") ==
+               :postgresql_conf
+    end
+
+    test "another name takes the kind from the editor's language identifier" do
+      conf = "file:///etc/postgresql/16/main/conf.d/10-memory.conf"
+      assert FileKind.detect(conf, "postgresql-conf") == :postgresql_conf
+      assert FileKind.detect(conf, "PostgreSQL Config") == :postgresql_conf
+      assert FileKind.detect("file:///tmp/hba.d/app.conf", "pg-hba") == :pg_hba_conf
+      assert FileKind.detect("file:///tmp/maps.conf", "pg-ident") == :pg_ident_conf
+      assert FileKind.detect(conf, "ini") == :unknown
+      assert FileKind.detect(conf) == :unknown
+    end
+
+    test "PostgreSQL's own names win over the identifier" do
+      assert FileKind.detect("file:///etc/pg_hba.conf", "postgresql-conf") == :pg_hba_conf
+    end
+
     test "unknown" do
       assert FileKind.detect("file:///home/user/file.txt") == :unknown
       assert FileKind.detect("file:///tmp/other.conf") == :unknown

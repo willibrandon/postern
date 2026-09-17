@@ -63,8 +63,13 @@
         ],
         "filenames": [
           "postgresql.conf",
-          "postgresql.auto.conf"
+          "postgresql.auto.conf",
+          "postgresql.base.conf"
         ],
+        "filenamePatterns": [
+          "**/postgresql/**/conf.d/*.conf"
+        ],
+        "firstLine": "^#\\s*postern:",
         "configuration": "./language-configuration.json"
       },
       {

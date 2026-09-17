@@ -9,6 +9,8 @@ repository = "https://github.com/willibrandon/postern"
 [language_servers.postern]
 name = "Postern"
 languages = ["PostgreSQL Config"]
+# The id the other editor packages send, rather than the language name.
+language_ids = { "PostgreSQL Config" = "postgresql-conf" }
 
 [grammars.postgresql_conf]
 repository = "https://github.com/willibrandon/tree-sitter-postgresql-conf"

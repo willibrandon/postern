@@ -59,6 +59,28 @@ suite("Postern", () => {
     assert.equal(unknown.range.start.line, 3);
   });
 
+  test("takes a conf.d file under a postgresql directory as postgresql.conf", async () => {
+    const uri = vscode.Uri.joinPath(
+      workspace(),
+      "postgresql",
+      "16",
+      "main",
+      "conf.d",
+      "10-memory.conf",
+    );
+    const document = await vscode.workspace.openTextDocument(uri);
+    assert.equal(document.languageId, "postgresql-conf");
+    await vscode.window.showTextDocument(document);
+
+    const diagnostics = await waitFor(() => {
+      const found = vscode.languages.getDiagnostics(uri).filter((d) => d.source === "postern");
+      return found.length > 0 ? found : undefined;
+    });
+    const unknown = diagnostics.find((d) => d.message.includes("shared_buffers"));
+    assert.ok(unknown, `expected a did-you-mean diagnostic, got ${JSON.stringify(diagnostics)}`);
+    assert.equal(unknown.range.start.line, 1);
+  });
+
   test("hovers a setting with its catalog entry", async () => {
     const uri = vscode.Uri.joinPath(workspace(), "postgresql.conf");
     await vscode.workspace.openTextDocument(uri);

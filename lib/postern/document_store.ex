@@ -8,7 +8,7 @@ defmodule Postern.DocumentStore do
   * `:language_id` - language identifier from the client
   * `:version` - document version
   * `:text` - full document text
-  * `:kind` - file kind detected from the URI via `Postern.FileKind`
+  * `:kind` - file kind from the URI and the language identifier via `Postern.FileKind`
 
   The store lives inside `GenLSP.Assigns` under the key `:documents`.
   """
@@ -45,7 +45,7 @@ defmodule Postern.DocumentStore do
   """
   @spec put(GenLSP.LSP.t(), uri(), String.t(), integer(), String.t()) :: GenLSP.LSP.t()
   def put(lsp, uri, text, version, language_id \\ "") do
-    kind = FileKind.detect(uri)
+    kind = FileKind.detect(uri, language_id)
 
     doc = %{
       uri: uri,
@@ -72,9 +72,7 @@ defmodule Postern.DocumentStore do
         put(lsp, uri, text, version)
 
       existing ->
-        kind = FileKind.detect(uri)
-
-        doc = %{existing | text: text, version: version, kind: kind}
+        doc = %{existing | text: text, version: version}
 
         GenLSP.LSP.assign(lsp, fn current ->
           documents = Map.get(current, :documents, %{})

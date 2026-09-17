@@ -11,8 +11,12 @@ scope = "source.postgresql-conf"
 file-types = [
   { glob = "postgresql.conf" },
   { glob = "postgresql.auto.conf" },
+  { glob = "postgresql.base.conf" },
   { glob = "pg_hba.conf" },
   { glob = "pg_ident.conf" },
+  # An include_dir under a postgresql directory, as Debian lays it out:
+  # /etc/postgresql/16/main/conf.d/*.conf
+  { glob = "postgresql/**/conf.d/*.conf" },
 ]
 comment-token = "#"
 language-servers = ["postern"]

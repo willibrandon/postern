@@ -20,11 +20,12 @@ defmodule Postern.Diagnostics do
   @doc """
   Returns diagnostics for the given `uri` and `text`.
 
-  The file kind is detected from the URI via `Postern.FileKind`.
+  The file kind is `:kind` in the options when the caller knows it, and is
+  otherwise detected from the URI via `Postern.FileKind`.
   """
   @spec for_document(String.t(), String.t(), map() | keyword()) :: [Diagnostic.t()]
   def for_document(uri, text, options \\ %{}) when is_binary(uri) and is_binary(text) do
-    case FileKind.detect(uri) do
+    case option(options, :kind) || FileKind.detect(uri) do
       :unknown -> []
       kind -> offline(kind, uri, text, options) ++ live(kind, uri, options)
     end

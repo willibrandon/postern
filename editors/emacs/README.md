@@ -1,5 +1,7 @@
 Postern for Emacs is `postgresql-conf-ts-mode`, a major mode for `postgresql.conf`, `postgresql.auto.conf`, `pg_hba.conf` and `pg_ident.conf` in Emacs 29.1 or newer. Highlighting, Imenu and defun navigation come from the [tree-sitter grammar](https://github.com/willibrandon/tree-sitter-postgresql-conf); Eglot runs the [Postern](https://github.com/willibrandon/postern) language server, which must be on your `PATH` as `postern`.
 
+The mode also owns `postgresql.base.conf`, which Patroni keeps the original file as, a `.conf` file under a `conf.d` directory below a `postgresql` directory, which is how Debian lays out an `include_dir`, and any file whose first line is a `# postern:` comment.
+
 Install from a checkout:
 
 ```elisp

@@ -10,7 +10,7 @@ The hint about trust on non-local `pg_hba.conf` rules has a toggle in Fresh Sett
 
 The server inherits Fresh's environment, so `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER` and `PGPASSWORD` decide whether it also checks settings against a running server.
 
-A package manifest can only claim files by extension, and `.conf` is not ours, so the bundle's plugin claims the four file names when it loads, then reloads the grammar registry so files that were already open, including one named on the command line, are picked up too. That is a per-session setting; `config.json` is never modified, and names you list under `languages.postgresql-conf.filenames` are kept.
+A package manifest can only claim files by extension, and `.conf` is not ours, so the bundle's plugin claims the file names when it loads, with `postgresql.base.conf`, which Patroni keeps the original file as, and `**/postgresql/**/conf.d/*.conf`, which is how Debian lays out an `include_dir`, then reloads the grammar registry so files that were already open, including one named on the command line, are picked up too. That is a per-session setting; `config.json` is never modified, and names or globs you list under `languages.postgresql-conf.filenames` are kept.
 
 Development requires Node 24 or newer and Fresh on the `PATH`.
 

@@ -1,7 +1,12 @@
 # Postern
 
 PostgreSQL configuration files in Visual Studio Code: `postgresql.conf`, `postgresql.auto.conf`,
-`pg_hba.conf` and `pg_ident.conf`.
+`pg_hba.conf` and `pg_ident.conf`. The extension also takes `postgresql.base.conf`, which Patroni
+keeps the original file as, and a `.conf` file under a `conf.d` directory below a `postgresql`
+directory, which is how Debian lays out an `include_dir`. For another layout, map the files to
+`postgresql-conf` in `files.associations` and the server follows. A file that no language claims by
+name or extension is taken when its first line is a `# postern:` comment; `.conf` itself belongs to
+Properties, so that does not reach a `.conf` file.
 
 ## Features
 

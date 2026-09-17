@@ -136,12 +136,12 @@ defmodule Postern.Server do
   def handle_request(%TextDocumentHover{params: params}, lsp) do
     reply =
       case DocumentStore.get(lsp, params.text_document.uri) do
-        %{text: text} ->
+        %{text: text, kind: kind} ->
           Features.hover(
             params.text_document.uri,
             text,
             params.position,
-            feature_options(lsp)
+            Map.put(feature_options(lsp), :kind, kind)
           )
 
         nil ->
@@ -154,12 +154,12 @@ defmodule Postern.Server do
   def handle_request(%TextDocumentCompletion{params: params}, lsp) do
     reply =
       case DocumentStore.get(lsp, params.text_document.uri) do
-        %{text: text} ->
+        %{text: text, kind: kind} ->
           Features.completion(
             params.text_document.uri,
             text,
             params.position,
-            Map.get(current_assigns(lsp), :initialization_options, %{})
+            Map.put(Map.new(current_assigns(lsp).initialization_options || %{}), :kind, kind)
           )
 
         nil ->
@@ -256,7 +256,7 @@ defmodule Postern.Server do
     doc = params.text_document
     lsp = DocumentStore.put(lsp, doc.uri, doc.text, doc.version, doc.language_id)
     publish_diagnostics(lsp, doc.uri, doc.text, doc.version)
-    publish_related(lsp, doc.uri)
+    publish_related(lsp, doc.uri, document_kind(lsp, doc.uri))
     {:noreply, lsp}
   end
 
@@ -273,19 +273,20 @@ defmodule Postern.Server do
     text = DocumentStore.apply_changes(current, params.content_changes)
     lsp = DocumentStore.update(lsp, uri, text, version)
     publish_diagnostics(lsp, uri, text, version)
-    publish_related(lsp, uri)
+    publish_related(lsp, uri, document_kind(lsp, uri))
     {:noreply, lsp}
   end
 
   def handle_notification(%TextDocumentDidClose{params: params}, lsp) do
     uri = params.text_document.uri
+    kind = document_kind(lsp, uri)
     lsp = DocumentStore.delete(lsp, uri)
 
     GenLSP.notify(lsp, %TextDocumentPublishDiagnostics{
       params: %PublishDiagnosticsParams{uri: uri, diagnostics: []}
     })
 
-    publish_related(lsp, uri)
+    publish_related(lsp, uri, kind)
     {:noreply, lsp}
   end
 
@@ -307,9 +308,9 @@ defmodule Postern.Server do
   # What pg_hba.conf reports depends on pg_ident.conf and the other way round,
   # so when one changes, the other one open next to it is checked again. That
   # covers a close as well, since the check then falls back to the disk.
-  defp publish_related(lsp, uri) do
+  defp publish_related(lsp, uri, kind) do
     directory = uri |> FileKind.uri_to_path() |> Path.dirname()
-    related = related_kinds(FileKind.detect(uri))
+    related = related_kinds(kind)
 
     for {other_uri, document} <- DocumentStore.all(lsp),
         other_uri != uri,
@@ -355,21 +356,31 @@ defmodule Postern.Server do
     options =
       base_options
       |> Map.merge(document_options(lsp))
+      |> Map.put(:kind, document_kind(lsp, uri))
       |> Map.put(:live_snapshot, live_snapshot)
       |> Map.put(:live_configured, LiveOracle.connection_options(base_options) != nil)
 
     Diagnostics.for_document(uri, text, options)
   end
 
+  # The kind the document was opened with, or the name's when it is not open.
+  defp document_kind(lsp, uri) do
+    case DocumentStore.get(lsp, uri) do
+      %{kind: kind} -> kind
+      nil -> FileKind.detect(uri)
+    end
+  end
+
   # Inlay hints and code actions describe settings, so only postgresql.conf
   # documents get them.
   defp live_feature_result(lsp, uri, callback) do
-    with :postgresql_conf <- FileKind.detect(uri),
-         %{text: text} <- DocumentStore.get(lsp, uri) do
-      snapshot = LiveOracle.snapshot(current_assigns(lsp).live_oracle)
-      callback.(uri, text, snapshot)
-    else
-      _ -> []
+    case DocumentStore.get(lsp, uri) do
+      %{text: text, kind: :postgresql_conf} ->
+        snapshot = LiveOracle.snapshot(current_assigns(lsp).live_oracle)
+        callback.(uri, text, snapshot)
+
+      _ ->
+        []
     end
   end
 

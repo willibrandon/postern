@@ -27,10 +27,15 @@ defmodule Postern.Features do
   @address_keywords ~w(all samehost samenet)
   @boolean_values ~w(on off true false yes no 1 0)
 
-  @doc "Returns hover information for a document position, or `nil`."
+  @doc """
+  Returns hover information for a document position, or `nil`.
+
+  The file kind is `:kind` in the options when the caller knows it, and is
+  otherwise detected from the URI.
+  """
   @spec hover(String.t(), String.t(), Position.t(), map() | keyword()) :: Hover.t() | nil
   def hover(uri, text, position, options \\ %{}) do
-    case FileKind.detect(uri) do
+    case option(options, :kind) || FileKind.detect(uri) do
       :postgresql_conf -> postgresql_hover(text, position, options)
       _ -> nil
     end
@@ -71,7 +76,7 @@ defmodule Postern.Features do
   @spec completion(String.t(), String.t(), Position.t(), map() | keyword()) :: CompletionList.t()
   def completion(uri, text, position, options \\ %{}) do
     items =
-      case FileKind.detect(uri) do
+      case option(options, :kind) || FileKind.detect(uri) do
         :postgresql_conf -> postgresql_completion(text, position, options)
         :pg_hba_conf -> hba_completion(text, position, options)
         _ -> []

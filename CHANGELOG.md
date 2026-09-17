@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+- A file with another name is checked as what the editor calls it: `postgresql-conf`, `pg-hba` or
+  `pg-ident`. The editor packages claim `postgresql.base.conf`, which Patroni keeps the original
+  file as, and a `.conf` file under a `conf.d` directory below a `postgresql` directory, which is
+  how Debian lays out an `include_dir`; Neovim, Emacs and Zed also take a file whose first line is
+  a `# postern:` comment. The Zed extension sends `postgresql-conf` as the language id.
 - A check on `pg_hba.conf` reads the `pg_ident.conf` next to it, and the other way round: from
   the editor while the file is open, from the disk otherwise. A map no longer shows as missing
   or unused because of which files happen to be open, and when one of the two changes the other

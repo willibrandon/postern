@@ -288,6 +288,47 @@ defmodule Postern.ServerTest do
       assert docs[uri].kind == :pg_hba_conf
     end
 
+    test "a file the editor calls postgresql-conf is checked as one", %{
+      server: server,
+      client: client
+    } do
+      uri = "file:///etc/postgresql/16/main/conf.d/10-memory.conf"
+
+      notify(client, %{
+        "jsonrpc" => "2.0",
+        "method" => "textDocument/didOpen",
+        "params" => %{
+          "textDocument" => %{
+            "uri" => uri,
+            "languageId" => "postgresql-conf",
+            "version" => 1,
+            "text" => "shared_buffrs = 128MB\n"
+          }
+        }
+      })
+
+      assert_notification("textDocument/publishDiagnostics", %{
+        "uri" => ^uri,
+        "diagnostics" => [%{"message" => message}]
+      })
+
+      assert message =~ "shared_buffers"
+      assert server_assigns(server)[:documents][uri].kind == :postgresql_conf
+
+      notify(client, %{
+        "jsonrpc" => "2.0",
+        "method" => "textDocument/didChange",
+        "params" => %{
+          "textDocument" => %{"uri" => uri, "version" => 2},
+          "contentChanges" => [%{"text" => "shared_buffers = 128MB\n"}]
+        }
+      })
+
+      assert_notification("textDocument/publishDiagnostics", %{"uri" => ^uri, "diagnostics" => []})
+
+      assert server_assigns(server)[:documents][uri].kind == :postgresql_conf
+    end
+
     test "updates document on didChange (full sync)", %{server: server, client: client} do
       uri = "file:///tmp/postgresql.conf"
 

@@ -1,6 +1,9 @@
 name = "PostgreSQL Config"
 grammar = "postgresql_conf"
-path_suffixes = ["postgresql.conf", "postgresql.auto.conf", "pg_hba.conf", "pg_ident.conf"]
+path_suffixes = ["postgresql.conf", "postgresql.auto.conf", "postgresql.base.conf", "pg_hba.conf", "pg_ident.conf"]
+# A file with another name, such as one under conf.d, that starts with the
+# comment Postern reads for the target version.
+first_line_pattern = '^#\s*postern:'
 line_comments = ["# "]
 brackets = [
   { start = "'", end = "'", close = true, newline = false, not_in = ["string", "comment"] },

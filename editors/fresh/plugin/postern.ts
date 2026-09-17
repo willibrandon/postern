@@ -1,4 +1,4 @@
-// Gives the four PostgreSQL files to the "postgresql-conf" language, whose
+// Gives the PostgreSQL files to the "postgresql-conf" language, whose
 // comment prefix and language server the bundle manifest declares.
 //
 // A manifest can only claim files by extension, and ".conf" belongs to many
@@ -20,7 +20,17 @@ const LANGUAGE = "postgresql-conf";
 const PACKAGE = "postern";
 const GRAMMAR = ["grammars", "postgresql-conf.sublime-syntax"];
 const GRAMMAR_NAME = "PostgreSQL Config";
-const FILENAMES = ["postgresql.conf", "postgresql.auto.conf", "pg_hba.conf", "pg_ident.conf"];
+const FILENAMES = [
+  "postgresql.conf",
+  "postgresql.auto.conf",
+  "postgresql.base.conf",
+  "pg_hba.conf",
+  "pg_ident.conf",
+];
+// An include_dir under a postgresql directory, as Debian lays it out:
+// /etc/postgresql/16/main/conf.d/*.conf. A glob that names directories is
+// matched against the whole path.
+const PATTERNS = ["**/postgresql/**/conf.d/*.conf"];
 
 type ServerConfig = {
   command?: string;
@@ -96,7 +106,7 @@ const language = (editor.getConfig() as Config).languages?.[LANGUAGE];
 const filenames = Array.isArray(language?.filenames)
   ? language.filenames.filter((name): name is string => typeof name === "string")
   : [];
-for (const name of FILENAMES) {
+for (const name of [...FILENAMES, ...PATTERNS]) {
   if (!filenames.includes(name)) filenames.push(name);
 }
 editor.setSetting(`languages.${LANGUAGE}.filenames`, filenames);

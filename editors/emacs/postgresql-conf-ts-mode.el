@@ -12,7 +12,9 @@
 ;; A major mode for postgresql.conf, postgresql.auto.conf, pg_hba.conf and
 ;; pg_ident.conf, powered by tree-sitter and paired with the Postern language
 ;; server through Eglot.  One grammar covers the three files, so one mode
-;; does too.
+;; does too.  It also takes postgresql.base.conf, a .conf file under a
+;; conf.d directory below a postgresql directory, and any file whose first
+;; line is a `# postern:' comment.
 ;;
 ;; The parser is a compiled library built from the grammar.  Emacs builds it
 ;; with `treesit-install-language-grammar', which this file gives the
@@ -177,8 +179,19 @@ Eglot runs the Postern language server."
 
 ;;;###autoload
 (add-to-list 'auto-mode-alist
-             (cons (rx "/" (or "postgresql.conf" "postgresql.auto.conf" "pg_hba.conf" "pg_ident.conf") eos)
+             (cons (rx (or (seq "/" (or "postgresql.conf" "postgresql.auto.conf" "postgresql.base.conf"
+                                        "pg_hba.conf" "pg_ident.conf"))
+                           ;; An include_dir under a postgresql directory, as Debian
+                           ;; lays it out: /etc/postgresql/16/main/conf.d/*.conf
+                           (seq "/postgresql/" (* nonl) "/conf.d/" (+ (not (any "/"))) ".conf"))
+                       eos)
                    #'postgresql-conf-ts-mode))
+
+;; A file with another name that starts with the comment Postern reads for
+;; the target version.
+;;;###autoload
+(add-to-list 'magic-mode-alist
+             (cons (rx bos "#" (* blank) "postern:") #'postgresql-conf-ts-mode))
 
 (defvar eglot-server-programs)
 
