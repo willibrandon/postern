@@ -1,25 +1,26 @@
 defmodule Postern.RuntimeArgs do
   @moduledoc """
-  Provides command-line arguments in Mix and Burrito environments.
+  The command-line arguments, and whether the VM runs inside a Burrito binary.
+
+  Burrito is a dependency of the release alone, so the calls into it are
+  guarded at runtime rather than compiled away: a build without it then has
+  a `standalone?/0` that is a check rather than a constant the type checker
+  would fold into every caller.
   """
 
-  if Code.ensure_loaded?(Burrito.Util.Args) do
-    alias Burrito.Util.Args, as: BurritoArgs
+  @compile {:no_warn_undefined, [Burrito.Util, Burrito.Util.Args]}
 
-    @doc "Returns arguments passed to the Burrito executable."
-    @spec argv() :: [String.t()]
-    def argv, do: BurritoArgs.argv()
+  alias Burrito.Util.Args, as: BurritoArgs
 
-    @doc "Returns true when running inside a Burrito-wrapped binary."
-    @spec standalone?() :: boolean()
-    def standalone?, do: Burrito.Util.running_standalone?()
-  else
-    @doc "Returns the VM command-line arguments."
-    @spec argv() :: [String.t()]
-    def argv, do: System.argv()
+  @doc "The arguments the program was started with, from Burrito's launcher or the VM."
+  @spec argv() :: [String.t()]
+  def argv do
+    if standalone?(), do: BurritoArgs.argv(), else: System.argv()
+  end
 
-    @doc "Returns true when running inside a Burrito-wrapped binary."
-    @spec standalone?() :: boolean()
-    def standalone?, do: false
+  @doc "Whether this VM runs inside a Burrito-wrapped binary."
+  @spec standalone?() :: boolean()
+  def standalone? do
+    Code.ensure_loaded?(Burrito.Util) and Burrito.Util.running_standalone?()
   end
 end

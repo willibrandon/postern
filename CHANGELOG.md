@@ -4,7 +4,15 @@
 
 - Paths are compared in one canonical form and a file URI carries a Windows drive the way
   editors write it, so include trees and the file next to a document resolve on Windows too.
-  The suite runs on macOS and Windows in CI as well as Linux.
+- A configured server that is not there no longer holds up every request for the seconds
+  Postgrex waits before it drops a query from its queue. The live oracle takes the connection's
+  own notifications instead, so a check answers at once while the server is away, apart from
+  the first one after the language server starts, which waits up to two seconds for the
+  connection to come up.
+- CI and releases build on Elixir 1.20.4 and Erlang/OTP 28.5.0.6, and the suite runs on macOS
+  and Windows as well as Linux. `mix test` alone runs all of it on a fresh clone: the stdio
+  tests start their server from the test build, and the transport they need is a setting,
+  `config :postern, stdio: false`, that the test environment turns off.
 
 ## [0.2.0] - 2026-09-17
 

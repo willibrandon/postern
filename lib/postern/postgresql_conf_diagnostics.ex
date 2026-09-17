@@ -304,8 +304,6 @@ defmodule Postern.PostgresqlConfDiagnostics do
     end
   end
 
-  defp unit_dimension(nil), do: :none
-
   defp numeric(nil), do: nil
 
   defp numeric(value) when is_binary(value) do
