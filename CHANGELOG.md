@@ -13,6 +13,8 @@
   and Windows as well as Linux. `mix test` alone runs all of it on a fresh clone: the stdio
   tests start their server from the test build, and the transport they need is a setting,
   `config :postern, stdio: false`, that the test environment turns off.
+- A live server's rows about a file no longer crash its check. The oracle's text protocol sends
+  a line number as text, and the live diagnostics read it as a number.
 
 ## [0.2.0] - 2026-09-17
 

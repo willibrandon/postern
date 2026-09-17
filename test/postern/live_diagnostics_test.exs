@@ -124,6 +124,20 @@ defmodule Postern.LiveDiagnosticsTest do
            )
   end
 
+  test "reads a line number the way the oracle's text protocol sends it" do
+    snapshot = %{
+      hba_rules: [
+        %{"file_name" => "/etc/pg_hba.conf", "line_number" => "133", "error" => "invalid"}
+      ],
+      ident_mappings: []
+    }
+
+    [diagnostic] =
+      LiveDiagnostics.for_document("file:///etc/pg_hba.conf", snapshot, true, :pg_hba_conf)
+
+    assert diagnostic.range.start.line == 132
+  end
+
   test "maps live HBA and ident rule errors" do
     hba = %{
       hba_rules: [

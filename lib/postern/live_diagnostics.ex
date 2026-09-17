@@ -108,14 +108,21 @@ defmodule Postern.LiveDiagnostics do
     Path.basename(to_string(sourcefile)) == Path.basename(Postern.FileKind.uri_to_path(uri))
   end
 
+  # The oracle runs its queries in the text protocol, so a line number
+  # arrives as "133".
+  defp number(value) when is_integer(value), do: value
+  defp number(value) when is_binary(value), do: String.to_integer(value)
+
   defp truthy?(value) when value in [true, "t", "true", "on", 1, "1"], do: true
   defp truthy?(_value), do: false
 
   defp diagnostic(line, message, severity) do
+    line = max(number(line) - 1, 0)
+
     %Diagnostic{
       range: %Range{
-        start: %Position{line: max(line - 1, 0), character: 0},
-        end: %Position{line: max(line - 1, 0), character: 0}
+        start: %Position{line: line, character: 0},
+        end: %Position{line: line, character: 0}
       },
       severity: severity,
       source: "postern",
