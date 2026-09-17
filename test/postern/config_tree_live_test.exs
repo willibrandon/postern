@@ -165,11 +165,15 @@ defmodule Postern.ConfigTreeLiveTest do
   defp read!(conn, path),
     do: hd(hd(Postgrex.query!(conn, "select pg_read_file($1)", [path]).rows))
 
-  # COPY takes no parameters, so the command is a literal; the lines are
-  # written one per row, since COPY's text format would escape a newline.
+  # COPY takes no parameters, so the command is a literal. The query has no
+  # row: the server writes its rows to the program's pipe and flushes them
+  # when it closes it, and a program that never reads its input may have
+  # exited by then, which the server reports as a broken pipe.
   defp program!(conn, command),
-    do: Postgrex.query!(conn, "copy (select 1) to program #{literal(command)}", [])
+    do: Postgrex.query!(conn, "copy (select 1 where false) to program #{literal(command)}", [])
 
+  # The lines are written one per row, since COPY's text format would escape
+  # a newline.
   defp write!(conn, path, lines) do
     values = Enum.map_join(lines, ", ", &literal/1)
 
