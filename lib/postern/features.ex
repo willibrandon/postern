@@ -30,7 +30,6 @@ defmodule Postern.Features do
   alias Postern.PgHbaOptions
 
   @connection_types ~w(local host hostssl hostnossl hostgssenc hostnogssenc)
-  @auth_methods ~w(trust reject scram-sha-256 md5 password gss sspi ident peer ldap radius cert pam bsd oauth)
   @address_keywords ~w(all samehost samenet)
   @boolean_values ~w(on off true false yes no 1 0)
 
@@ -304,7 +303,8 @@ defmodule Postern.Features do
   defp hba_candidates([type, _database], live, _version) when type in @connection_types,
     do: ~w(all +group) ++ live.roles
 
-  defp hba_candidates(["local", _database, _user], _live, _version), do: @auth_methods
+  defp hba_candidates(["local", _database, _user], _live, version),
+    do: PgHbaOptions.methods(version)
 
   defp hba_candidates(["local", _database, _user, method | _options], _live, version),
     do: PgHbaOptions.for_rule("local", method, version)
@@ -312,16 +312,18 @@ defmodule Postern.Features do
   defp hba_candidates([type, _database, _user], _live, _version) when type in @connection_types,
     do: @address_keywords
 
-  defp hba_candidates([type, _database, _user, _address], _live, _version)
+  defp hba_candidates([type, _database, _user, _address], _live, version)
        when type in @connection_types,
-       do: @auth_methods
+       do: PgHbaOptions.methods(version)
 
   defp hba_candidates([type, _database, _user, _address, method | _options], _live, version)
        when type in @connection_types,
        do: PgHbaOptions.for_rule(type, method, version)
 
-  defp hba_candidates(_fields, _live, version),
-    do: @connection_types ++ @auth_methods ++ @address_keywords ++ PgHbaOptions.all(version)
+  defp hba_candidates(_fields, _live, version) do
+    @connection_types ++
+      PgHbaOptions.methods(version) ++ @address_keywords ++ PgHbaOptions.all(version)
+  end
 
   defp live_values(options) do
     case option(options, :live_snapshot) do

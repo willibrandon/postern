@@ -38,7 +38,38 @@ defmodule Postern.PgIdentDiagnostics do
     referenced = referenced_maps(hba_text, Map.get(options, :hba_tree), version)
 
     parser_diagnostics ++
+      version_diagnostics(entries, version) ++
       unused_diagnostics(entries, referenced) ++ include_diagnostics(tree, path)
+  end
+
+  # The three directives and a regular expression as the PostgreSQL user name
+  # arrived in 16. An older server reads an include line as a mapping short
+  # of its third field, and takes a name that starts with a slash for a name.
+  defp version_diagnostics(entries, version) do
+    directives =
+      if PgHbaOptions.directives?(version),
+        do: [],
+        else:
+          for(
+            %{type: :include, span: span} <- entries,
+            do: diagnostic(span, @error, "missing entry at end of line")
+          )
+
+    regexes =
+      if PgHbaOptions.regex?(version),
+        do: [],
+        else:
+          for(
+            %{type: :mapping, pg_user: "/" <> _ = name, pg_span: span} <- entries,
+            do:
+              diagnostic(
+                span,
+                @warning,
+                ~s("#{name}" is a name to PostgreSQL #{version}; a regular expression here needs 16)
+              )
+          )
+
+    directives ++ regexes
   end
 
   defp include_diagnostics(nil, _path), do: []

@@ -117,9 +117,55 @@ defmodule Postern.ParserTest do
       assert include.file == "hba.d"
     end
 
-    test "reports invalid rule shape without crashing" do
-      assert %{type: :error, span: %{line: 3}} = PgHba.parse_line("host all all", 3)
-      assert %{type: :error} = PgHba.parse_line("not_a_connection_type all all trust", 4)
+    test "reads the fields the way parse_hba_line does and says where a line ends too soon" do
+      shape = fn line -> PgHba.parse_line(line, 3) end
+
+      for {line, message} <- [
+            {"host", "end-of-line before database specification"},
+            {"host all", "end-of-line before role specification"},
+            {"host all all", "end-of-line before IP address specification"},
+            {"host all all 10.0.0.0", "end-of-line before netmask specification"},
+            {"host all all 10.0.0.0/8", "end-of-line before authentication method"},
+            {"local all all", "end-of-line before authentication method"},
+            {"host,hostssl all all all md5", "multiple values specified for connection type"},
+            {"host all all 10.0.0.0/8,10.1.0.0/8 md5",
+             "multiple values specified for host address"},
+            {"host all all 10.0.0.0 255.0.0.0,255.255.0.0 md5",
+             "multiple values specified for netmask"},
+            {"host all all all md5,trust", "multiple values specified for authentication type"},
+            {"host all all 10.0.0.0 md5", ~s(invalid IP mask "md5")},
+            {"host all all 10.0.0.0 ffff::0 md5", "IP address and mask do not match"},
+            {"host all all example.com/24 md5",
+             ~s(specifying both host name and CIDR mask is invalid: "example.com/24")},
+            {"host all all 10.0.0.0/33 md5", ~s(invalid CIDR mask in address "10.0.0.0/33")},
+            {~s("host" all all 10.0.0.0/8 md5), ~s(invalid connection type "host")},
+            {"not_a_connection_type all all trust",
+             ~s(invalid connection type "not_a_connection_type")}
+          ] do
+        assert %{type: :error, message: ^message, span: %{line: 3}} = shape.(line), line
+      end
+
+      # A host name and a keyword stand alone, so the next field is the
+      # method, whatever it says; only a bare IP address takes a netmask.
+      assert %{
+               address: "example.com",
+               address_kind: :host,
+               netmask: nil,
+               auth_method: "255.255.255.0"
+             } =
+               shape.("host all all example.com 255.255.255.0 md5")
+
+      assert %{address: "10.0.0.0", address_kind: :ip, netmask: "255.255.0.0", auth_method: "md5"} =
+               shape.("host all all 10.0.0.0 255.255.0.0 md5")
+
+      assert %{address_kind: :keyword, auth_method: "255.255.0.0"} =
+               shape.("host all all all 255.255.0.0 md5")
+
+      assert %{address_kind: :host, address: "all", auth_method: "md5"} =
+               shape.(~s(host all all "all" md5))
+
+      assert %{address_kind: :cidr, auth_method: "scram-sha-256-plus", method_span: %{col: 25}} =
+               shape.("host all all 10.0.0.0/8 scram-sha-256-plus")
     end
   end
 

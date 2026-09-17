@@ -15,10 +15,12 @@ defmodule Postern.ConfigTree do
   are the ones `pg_file_settings` and `pg_hba_file_rules` report.
   """
 
+  alias Postern.Catalog
   alias Postern.Files
   alias Postern.Parser.PgHba
   alias Postern.Parser.PgIdent
   alias Postern.Parser.PostgresqlConf
+  alias Postern.PgHbaOptions
 
   @max_depth 10
 
@@ -52,11 +54,13 @@ defmodule Postern.ConfigTree do
 
   A document named like a root is one. Any other file belongs to the nearest
   root above it that reaches it, or to one at most three directories down the
-  `:workspace`; a file no root reaches is a tree of its own.
+  `:workspace`; a file no root reaches is a tree of its own. The `:version`
+  decides whether pg_hba.conf and pg_ident.conf includes are followed, since
+  those directives arrived in 16.
   """
   @spec for_document(kind(), Path.t(), Files.t(), keyword()) :: t()
   def for_document(kind, path, files, opts \\ []) do
-    resolve(kind, root(kind, path, files, opts) || path, files)
+    resolve(kind, root(kind, path, files, opts) || path, files, opts)
   end
 
   @doc "The kind of a file its name does not give away: that of the root reaching it."
@@ -71,14 +75,17 @@ defmodule Postern.ConfigTree do
     if Path.basename(path) == root_name(kind) do
       path
     else
-      kind |> candidates(path, opts) |> Enum.find(&reaches?(kind, &1, path, files))
+      kind |> candidates(path, opts) |> Enum.find(&reaches?(kind, &1, path, files, opts))
     end
   end
 
   @doc "Resolves the tree under a root."
-  @spec resolve(kind(), Path.t(), Files.t()) :: t()
-  def resolve(kind, root, files) do
-    state = %{kind: kind, files: files, visited: [], entries: [], problems: []}
+  @spec resolve(kind(), Path.t(), Files.t(), keyword()) :: t()
+  def resolve(kind, root, files, opts \\ []) do
+    follow =
+      kind == :postgresql_conf or PgHbaOptions.directives?(opts[:version] || Catalog.latest())
+
+    state = %{kind: kind, files: files, follow: follow, visited: [], entries: [], problems: []}
 
     state =
       case files.read.(root) do
@@ -144,7 +151,7 @@ defmodule Postern.ConfigTree do
 
   defp visit(state, path, depth, %{type: :include} = entry) do
     state = %{state | entries: [%{path: path, entry: entry} | state.entries]}
-    include(state, path, depth, entry)
+    if state.follow, do: include(state, path, depth, entry), else: state
   end
 
   defp visit(state, path, _depth, entry),
@@ -261,8 +268,8 @@ defmodule Postern.ConfigTree do
     if parent == directory, do: [directory], else: [directory | ancestors(parent)]
   end
 
-  defp reaches?(kind, root, path, files) do
-    match?({:ok, _text}, files.read.(root)) and path in resolve(kind, root, files).files
+  defp reaches?(kind, root, path, files, opts) do
+    match?({:ok, _text}, files.read.(root)) and path in resolve(kind, root, files, opts).files
   end
 
   defp parser(:postgresql_conf), do: PostgresqlConf

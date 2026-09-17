@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+- A `pg_hba.conf` rule is read field by field the way hba.c reads it, so a line that ends too
+  soon, a list where one value belongs, a host name with a CIDR mask, a mask that does not fit
+  its address and a method the target version does not know are the server's errors in its
+  words, and a token meant as an address that the server would look up as a host name gets a
+  warning. `scram-sha-256-plus`, a SASL mechanism rather than a method, is no longer taken for
+  one. The include directives and regular expressions in `pg_hba.conf` and `pg_ident.conf` are
+  checked against the version, which took them in 16, oauth against 18, and includes are not
+  followed for an older target. Completion offers the methods the version has.
 - Postern follows `include`, `include_if_exists` and `include_dir` the way the server does,
   relative to the file that names them, in C locale order for a directory, and reads
   `postgresql.auto.conf` from the data directory last, so a setting a later file overrides gets

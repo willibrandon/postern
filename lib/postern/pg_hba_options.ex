@@ -21,10 +21,31 @@ defmodule Postern.PgHbaOptions do
 
   # PostgreSQL 18 added the oauth method and its options.
   @oauth_options ~w(issuer scope validator delegate_ident_mapping)
+  @methods ~w(trust reject scram-sha-256 md5 password gss sspi ident peer ldap radius cert pam bsd)
 
   @by_name Map.new(
              for {methods, label, names} <- @groups, name <- names, do: {name, {methods, label}}
            )
+
+  @doc "The authentication methods a version takes; oauth arrived in 18."
+  @spec methods(pos_integer()) :: [String.t()]
+  def methods(version) when version >= 18, do: @methods ++ ["oauth"]
+  def methods(_version), do: @methods
+
+  @doc """
+  Whether a version takes `include`, `include_if_exists` and `include_dir` in
+  pg_hba.conf and pg_ident.conf, which 16 added.
+  """
+  @spec directives?(pos_integer()) :: boolean()
+  def directives?(version), do: version >= 16
+
+  @doc """
+  Whether a version reads a database, user or pg_ident user name that starts
+  with a slash as a regular expression, which 16 added; an older one takes
+  it for a name.
+  """
+  @spec regex?(pos_integer()) :: boolean()
+  def regex?(version), do: version >= 16
 
   @doc "The methods that take a `map=` option, and so a map name from pg_ident.conf."
   @spec map_methods(pos_integer()) :: [String.t()]

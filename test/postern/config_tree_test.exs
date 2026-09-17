@@ -154,6 +154,11 @@ defmodule Postern.ConfigTreeTest do
     assert [%{severity: 1, message: message}] = hba.problems
     assert message == ~s(could not open file "/pg/gone.conf": No such file or directory)
 
+    # An older target has no directives to follow.
+    old = ConfigTree.resolve(:pg_hba_conf, "/pg/pg_hba.conf", files, version: 15)
+    assert old.files == ["/pg/pg_hba.conf"]
+    assert old.problems == []
+
     ident = ConfigTree.resolve(:pg_ident_conf, "/pg/pg_ident.conf", files)
     assert [%{severity: 4, message: skipped}] = ident.problems
     assert skipped == ~s(skipping missing authentication file "/pg/maps.conf")

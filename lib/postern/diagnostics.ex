@@ -36,7 +36,7 @@ defmodule Postern.Diagnostics do
 
       kind ->
         path = FileKind.uri_to_path(uri)
-        {tree, other} = trees(kind, path, options)
+        {tree, other} = trees(kind, path, text, options)
 
         one_override_per_line(
           offline(kind, path, text, options, tree, other) ++ live(kind, uri, options)
@@ -78,26 +78,27 @@ defmodule Postern.Diagnostics do
 
   # The document's tree, and for the two authentication files the other one's
   # tree beside the root. Without a reader there is nothing to look at.
-  defp trees(kind, path, options) do
+  defp trees(kind, path, text, options) do
     case option(options, :reader) do
       %Files{} = files ->
-        tree = ConfigTree.for_document(kind, path, files, workspace: option(options, :workspace))
-        {tree, other_tree(kind, tree.root, files)}
+        opts = [workspace: option(options, :workspace), version: target_version(text, options)]
+        tree = ConfigTree.for_document(kind, path, files, opts)
+        {tree, other_tree(kind, tree.root, files, opts)}
 
       _none ->
         {nil, nil}
     end
   end
 
-  defp other_tree(:pg_hba_conf, root, files), do: beside(:pg_ident_conf, root, files)
-  defp other_tree(:pg_ident_conf, root, files), do: beside(:pg_hba_conf, root, files)
-  defp other_tree(_kind, _root, _files), do: nil
+  defp other_tree(:pg_hba_conf, root, files, opts), do: beside(:pg_ident_conf, root, files, opts)
+  defp other_tree(:pg_ident_conf, root, files, opts), do: beside(:pg_hba_conf, root, files, opts)
+  defp other_tree(_kind, _root, _files, _opts), do: nil
 
-  defp beside(kind, root, files) do
+  defp beside(kind, root, files, opts) do
     path = Path.join(Path.dirname(root), ConfigTree.root_name(kind))
 
     case files.read.(path) do
-      {:ok, _text} -> ConfigTree.resolve(kind, path, files)
+      {:ok, _text} -> ConfigTree.resolve(kind, path, files, opts)
       :error -> nil
     end
   end

@@ -49,7 +49,7 @@ defmodule Postern.Parser.PgHba do
 
   @connection_types ~w(local host hostssl hostnossl hostgssenc hostnogssenc)
   @include_directives ~w(include include_if_exists include_dir)
-  @auth_methods ~w(trust reject scram-sha-256 scram-sha-256-plus md5 password gss sspi ident peer ldap radius cert pam bsd oauth)
+  @address_keywords ~w(all samehost samenet)
 
   @type span :: %{
           line: pos_integer(),
@@ -68,6 +68,9 @@ defmodule Postern.Parser.PgHba do
             auth_method: String.t(),
             options: map(),
             tokens: [map()],
+            address_kind: :keyword | :cidr | :ip | :host | nil,
+            address_span: span() | nil,
+            method_span: span(),
             span: span(),
             raw: String.t()
           }
@@ -172,29 +175,13 @@ defmodule Postern.Parser.PgHba do
     do_tokenize(rest, acc, current <> <<c::utf8>>, false, nil)
   end
 
-  defp parse_tokens(tokens, raw_line, line_no) do
-    case tokens do
-      [] ->
-        %{type: :blank, span: span_for(line_no, 1, raw_line), raw: raw_line}
+  defp parse_tokens([], raw_line, line_no),
+    do: %{type: :blank, span: span_for(line_no, 1, raw_line), raw: raw_line}
 
-      [first | _] when first in @include_directives ->
-        parse_include(tokens, raw_line, line_no)
-
-      [conn_type | _] when conn_type in @connection_types ->
-        parse_rule(tokens, raw_line, line_no)
-
-      [maybe_include | _] when maybe_include in ["include", "include_if_exists", "include_dir"] ->
-        # also handle without _? already covered
-        parse_include(tokens, raw_line, line_no)
-
-      _ ->
-        %{
-          type: :error,
-          message: "unknown connection type #{inspect(hd(tokens))}",
-          span: span_for(line_no, 1, raw_line),
-          raw: raw_line
-        }
-    end
+  defp parse_tokens([first | _rest] = tokens, raw_line, line_no) do
+    if first in @include_directives,
+      do: parse_include(tokens, raw_line, line_no),
+      else: parse_rule(tokens, raw_line, line_no)
   end
 
   defp parse_include(tokens, raw_line, line_no) do
@@ -227,101 +214,153 @@ defmodule Postern.Parser.PgHba do
     end
   end
 
-  defp parse_rule(["local" | rest] = tokens, raw_line, line_no) do
-    parse_local_rule(rest, tokens, raw_line, line_no)
-  end
-
+  # A rule is read field by field the way parse_hba_line reads it: the
+  # connection type, the database list, the user list, then for anything but
+  # local an address, which is a keyword, a host name, a CIDR address, or an
+  # IP address followed by a netmask, then the method and its options. A
+  # field that ends too soon or holds a list where one value belongs is an
+  # error in the server's words. Whether the method exists is for the checks,
+  # which know the target version.
   defp parse_rule([conn_type | rest] = tokens, raw_line, line_no) do
-    parse_host_rule(conn_type, rest, tokens, raw_line, line_no)
-  end
+    with :ok <- single(conn_type, "connection type", raw_line, line_no),
+         :ok <- connection_type(conn_type, raw_line, line_no),
+         {:ok, database, rest} <- field(rest, "database specification", raw_line, line_no),
+         {:ok, user, rest} <- field(rest, "role specification", raw_line, line_no),
+         {:ok, address, netmask, rest} <- address(conn_type, rest, raw_line, line_no),
+         {:ok, method, options} <- field(rest, "authentication method", raw_line, line_no),
+         :ok <- single(method, "authentication type", raw_line, line_no) do
+      spans = token_spans(tokens, raw_line, line_no)
+      method_index = length(tokens) - length(options) - 1
 
-  defp parse_local_rule([db, user, method | opts], tokens, raw_line, line_no) do
-    rule_entry(
-      tokens,
       %{
-        connection_type: "local",
-        database: db,
-        user: user,
-        address: nil,
-        netmask: nil,
-        method: method,
-        options: opts
-      },
-      raw_line,
-      line_no
-    )
-  end
-
-  defp parse_local_rule(_tokens, _raw_tokens, raw_line, line_no) do
-    parse_error("local rule requires DATABASE USER METHOD", raw_line, line_no)
-  end
-
-  defp parse_host_rule(conn_type, rest, tokens, raw_line, line_no) do
-    case Enum.find_index(rest, &(&1 in @auth_methods)) do
-      nil ->
-        parse_error("could not find auth method in #{inspect(tokens)}", raw_line, line_no)
-
-      0 ->
-        parse_error("missing DATABASE/USER/ADDRESS before METHOD", raw_line, line_no)
-
-      1 ->
-        parse_error("missing DATABASE/USER/ADDRESS before METHOD", raw_line, line_no)
-
-      method_index ->
-        [db, user | tail] = rest
-        {address_tokens, [method | opts]} = Enum.split(tail, method_index - 2)
-        {address, netmask} = address_parts(address_tokens)
-
-        rule_entry(
-          tokens,
-          %{
-            connection_type: conn_type,
-            database: db,
-            user: user,
-            address: address,
-            netmask: netmask,
-            method: method,
-            options: opts
-          },
-          raw_line,
-          line_no
-        )
+        type: :rule,
+        connection_type: conn_type,
+        databases: split_list(database),
+        users: split_list(user),
+        address: maybe_unquote(address),
+        address_kind: address_kind(address),
+        netmask: maybe_unquote(netmask),
+        auth_method: unquote_token(method),
+        options: parse_options(options, raw_line, line_no),
+        tokens: spans,
+        address_span: address && Enum.at(spans, 3).span,
+        method_span: Enum.at(spans, method_index).span,
+        span: span_for(line_no, 1, raw_line),
+        raw: raw_line
+      }
     end
   end
 
-  defp address_parts([]), do: {nil, nil}
-  defp address_parts([address]), do: {address, nil}
-  defp address_parts([address, netmask]), do: {address, netmask}
-  defp address_parts(addresses), do: {Enum.join(addresses, " "), nil}
+  # The server names the field it ran out of input before.
+  defp field([], what, raw_line, line_no),
+    do: parse_error("end-of-line before #{what}", raw_line, line_no)
 
-  defp rule_entry(
-         tokens,
-         %{
-           connection_type: conn_type,
-           database: db,
-           user: user,
-           address: address,
-           netmask: netmask,
-           method: method,
-           options: opts
-         },
-         raw_line,
-         line_no
-       ) do
-    %{
-      type: :rule,
-      connection_type: conn_type,
-      databases: split_list(db),
-      users: split_list(user),
-      address: maybe_unquote(address),
-      netmask: maybe_unquote(netmask),
-      auth_method: unquote_token(method),
-      options: parse_options(opts, raw_line, line_no),
-      tokens: token_spans(tokens, raw_line, line_no),
-      span: span_for(line_no, 1, raw_line),
-      raw: raw_line
-    }
+  defp field([token | rest], _what, _raw_line, _line_no), do: {:ok, token, rest}
+
+  # A field that takes one value refuses a list.
+  defp single(token, what, raw_line, line_no) do
+    if length(split_outside_quotes(token, "", [], false)) > 1,
+      do: parse_error("multiple values specified for #{what}", raw_line, line_no),
+      else: :ok
   end
+
+  # The keywords count only unquoted, as token_is_keyword has it.
+  defp connection_type(token, raw_line, line_no) do
+    if token in @connection_types,
+      do: :ok,
+      else: parse_error(~s(invalid connection type "#{unquote_token(token)}"), raw_line, line_no)
+  end
+
+  # The address field: nothing on a local rule; a keyword, a host name or a
+  # CIDR address on its own; an IP address followed by its netmask. The
+  # server checks the address and the mask as it reads them, before it looks
+  # for the method, so those are errors here rather than in the checks.
+  defp address("local", rest, _raw_line, _line_no), do: {:ok, nil, nil, rest}
+
+  defp address(_type, [], raw_line, line_no),
+    do: parse_error("end-of-line before IP address specification", raw_line, line_no)
+
+  defp address(_type, [address | rest], raw_line, line_no) do
+    with :ok <- single(address, "host address", raw_line, line_no),
+         :ok <- cidr(address, raw_line, line_no) do
+      if address_kind(address) == :ip,
+        do: netmask(address, rest, raw_line, line_no),
+        else: {:ok, address, nil, rest}
+    end
+  end
+
+  # A CIDR address has an IP address before the slash and a mask that fits it.
+  defp cidr(token, raw_line, line_no) do
+    value = unquote_token(token)
+
+    with :cidr <- address_kind(token),
+         [host, mask] = String.split(value, "/", parts: 2),
+         {:ok, ip} <- :inet.parse_strict_address(String.to_charlist(host)),
+         true <- valid_prefix?(mask, ip) do
+      :ok
+    else
+      {:error, _reason} ->
+        parse_error(
+          ~s(specifying both host name and CIDR mask is invalid: "#{value}"),
+          raw_line,
+          line_no
+        )
+
+      false ->
+        parse_error(~s(invalid CIDR mask in address "#{value}"), raw_line, line_no)
+
+      _other_kind ->
+        :ok
+    end
+  end
+
+  defp valid_prefix?(mask, ip) do
+    case Integer.parse(mask) do
+      {prefix, ""} -> prefix >= 0 and prefix <= if(tuple_size(ip) == 4, do: 32, else: 128)
+      _other -> false
+    end
+  end
+
+  # A bare IP address takes the next field as its netmask, an address of the
+  # same family; whether the mask is contiguous is not the server's concern.
+  defp netmask(_address, [], raw_line, line_no),
+    do: parse_error("end-of-line before netmask specification", raw_line, line_no)
+
+  defp netmask(address, [netmask | rest], raw_line, line_no) do
+    {:ok, ip} = :inet.parse_strict_address(String.to_charlist(unquote_token(address)))
+    mask = unquote_token(netmask)
+
+    with :ok <- single(netmask, "netmask", raw_line, line_no),
+         {:ok, parsed} <- :inet.parse_strict_address(String.to_charlist(mask)),
+         true <- tuple_size(parsed) == tuple_size(ip) do
+      {:ok, address, netmask, rest}
+    else
+      {:error, _reason} -> parse_error(~s(invalid IP mask "#{mask}"), raw_line, line_no)
+      false -> parse_error("IP address and mask do not match", raw_line, line_no)
+      error -> error
+    end
+  end
+
+  # What the server makes of an address token: an unquoted keyword, a CIDR
+  # address, a bare IP address that takes a netmask, or else a host name,
+  # which is what anything it cannot parse as an address becomes.
+  defp address_kind(nil), do: nil
+
+  defp address_kind(token) do
+    value = unquote_token(token)
+
+    cond do
+      not String.starts_with?(token, "\"") and value in @address_keywords -> :keyword
+      String.contains?(value, "/") -> :cidr
+      numeric_ip?(value) -> :ip
+      true -> :host
+    end
+  end
+
+  @doc "Whether the server would take the text for an IP address rather than a host name."
+  @spec numeric_ip?(String.t()) :: boolean()
+  def numeric_ip?(value),
+    do: match?({:ok, _address}, :inet.parse_strict_address(String.to_charlist(value)))
 
   defp maybe_unquote(nil), do: nil
   defp maybe_unquote(value), do: unquote_token(value)

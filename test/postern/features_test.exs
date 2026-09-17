@@ -90,6 +90,17 @@ defmodule Postern.FeaturesTest do
     end
   end
 
+  test "pg_hba.conf completion offers the methods the target version has" do
+    labels = fn text ->
+      Features.completion("file:///tmp/pg_hba.conf", text, %Position{line: 1, character: 24}).items
+      |> Enum.map(& &1.label)
+    end
+
+    assert "oauth" in labels.("# postern: pg=18\nhost all all 10.0.0.0/8 ")
+    refute "oauth" in labels.("# postern: pg=17\nhost all all 10.0.0.0/8 ")
+    refute "scram-sha-256-plus" in labels.("# postern: pg=18\nhost all all 10.0.0.0/8 ")
+  end
+
   test "postgresql.conf completion offers setting names and enum values" do
     name_items =
       Features.completion(

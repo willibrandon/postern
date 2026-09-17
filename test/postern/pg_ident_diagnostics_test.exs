@@ -45,6 +45,20 @@ defmodule Postern.PgIdentDiagnosticsTest do
     assert Diagnostics.for_document("file:///tmp/pg_ident.conf", "admins root postgres\n") == []
   end
 
+  test "include lines and a regular expression user name follow the target version" do
+    diagnostics =
+      Diagnostics.for_document(
+        "file:///tmp/pg_ident.conf",
+        "# postern: pg=15\ninclude maps.conf\nmymap alice /^a/\n",
+        %{pg_hba_text: "local all all peer map=mymap\n"}
+      )
+
+    assert Enum.map(diagnostics, &{&1.range.start.line, &1.severity, &1.message}) == [
+             {1, 1, "missing entry at end of line"},
+             {2, 2, ~s("/^a/" is a name to PostgreSQL 15; a regular expression here needs 16)}
+           ]
+  end
+
   defp fixture!(name) do
     @fixtures
     |> Path.join(name)

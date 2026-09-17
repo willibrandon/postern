@@ -54,17 +54,65 @@ defmodule Postern.PgHbaDiagnostics do
       |> Enum.with_index()
       |> Enum.flat_map(fn
         {%{path: ^path, entry: rule}, index} ->
-          address_diagnostics(rule) ++
-            option_diagnostics(rule, version) ++
-            unsafe_method_diagnostics(rule, report_trust) ++
-            ident_reference_diagnostics(rule, maps, version) ++
-            shadow_diagnostics(rule, path, Enum.take(rules, index))
+          rule_diagnostics(rule, version, maps, report_trust, path, Enum.take(rules, index))
 
         _elsewhere ->
           []
       end)
 
-    parser_diagnostics(entries) ++ rule_diagnostics ++ include_diagnostics(tree, path)
+    parser_diagnostics(entries) ++
+      directive_diagnostics(entries, version) ++
+      rule_diagnostics ++ include_diagnostics(tree, path)
+  end
+
+  # The server stops at a method it does not know, so that is all it says
+  # about the rule; the parser has already refused an address it would.
+  defp rule_diagnostics(rule, version, maps, report_trust, path, previous) do
+    address_advice(rule) ++
+      case method_diagnostics(rule, version) do
+        [] ->
+          option_diagnostics(rule, version) ++
+            unsafe_method_diagnostics(rule, report_trust) ++
+            ident_reference_diagnostics(rule, maps, version) ++
+            shadow_diagnostics(rule, path, previous) ++
+            regex_diagnostics(rule, version)
+
+        invalid_method ->
+          invalid_method
+      end
+  end
+
+  defp method_diagnostics(%{auth_method: method, method_span: span}, version) do
+    if method in PgHbaOptions.methods(version),
+      do: [],
+      else: [diagnostic(span, @error, ~s(invalid authentication method "#{method}"))]
+  end
+
+  # The three directives arrived in 16; an older server reads the line as a
+  # rule and refuses the first word as its connection type.
+  defp directive_diagnostics(entries, version) do
+    if PgHbaOptions.directives?(version) do
+      []
+    else
+      for %{type: :include, directive: directive, tokens: [%{span: span} | _]} <- entries,
+          do: diagnostic(span, @error, ~s(invalid connection type "#{directive}"))
+    end
+  end
+
+  # A name that starts with a slash is a regular expression from 16 on; an
+  # older server takes it for a name, and no database or role is called that.
+  defp regex_diagnostics(%{databases: databases, users: users, span: span}, version) do
+    if PgHbaOptions.regex?(version) do
+      []
+    else
+      for name <- databases ++ users, String.starts_with?(name, "/") do
+        diagnostic(
+          span,
+          @warning,
+          ~s("#{name}" is a name to PostgreSQL #{version}; a regular expression here needs 16)
+        )
+      end
+    end
   end
 
   # The rules in the order PostgreSQL reads them: this file's alone, or the
@@ -89,69 +137,23 @@ defmodule Postern.PgHbaDiagnostics do
     end)
   end
 
-  defp address_diagnostics(%{connection_type: "local"}), do: []
-
-  defp address_diagnostics(%{address: address, netmask: netmask, span: span}) do
-    cond do
-      is_nil(address) ->
-        [diagnostic(span, @error, "host rule is missing an address")]
-
-      address in @address_keywords and netmask != nil ->
-        [
-          diagnostic(
-            span,
-            @error,
-            "netmask cannot be used with address keyword #{inspect(address)}"
-          )
-        ]
-
-      address in @address_keywords ->
-        []
-
-      netmask != nil ->
-        netmask_diagnostics(address, netmask, span)
-
-      true ->
-        cidr_diagnostics(address, span)
-    end
-  end
-
-  defp netmask_diagnostics(address, netmask, span) do
-    with {:ok, ip} <- parse_ip(address),
-         {:ok, mask} <- parse_ip(netmask),
-         true <- tuple_family(ip) == tuple_family(mask) do
-      []
+  # What the server takes for a host name it looks up at connection time, so
+  # a token that was meant as an address but does not parse deserves a word.
+  defp address_advice(%{address_kind: :host, address: address, address_span: span}) do
+    if Regex.match?(~r/^[0-9.]+$/, address) or String.contains?(address, ":") do
+      [
+        diagnostic(
+          span,
+          @warning,
+          ~s("#{address}" is not an IP address, so PostgreSQL takes it for a host name)
+        )
+      ]
     else
-      {:error, :hostname} ->
-        [diagnostic(span, @error, "netmask cannot be used with hostname #{inspect(address)}")]
-
-      _ ->
-        [diagnostic(span, @error, "malformed IP address or netmask")]
+      []
     end
   end
 
-  defp cidr_diagnostics(address, span) do
-    case String.split(address, "/", parts: 2) do
-      [ip_text, prefix_text] ->
-        with {:ok, ip} <- parse_ip(ip_text),
-             {prefix, ""} <- Integer.parse(prefix_text),
-             true <- prefix >= 0 and prefix <= max_prefix(ip) do
-          []
-        else
-          _ -> [diagnostic(span, @error, "malformed CIDR address #{inspect(address)}")]
-        end
-
-      [ip_text] ->
-        case parse_ip(ip_text) do
-          {:ok, _ip} -> []
-          {:error, :hostname} -> []
-          _ -> [diagnostic(span, @error, "malformed IP address #{inspect(address)}")]
-        end
-
-      _ ->
-        [diagnostic(span, @error, "malformed CIDR address #{inspect(address)}")]
-    end
-  end
+  defp address_advice(_rule), do: []
 
   # Each option is checked against the rule's connection type and method the
   # way hba.c checks it, and reported on the option itself.
@@ -343,18 +345,7 @@ defmodule Postern.PgHbaDiagnostics do
            (:binary.at(right, bytes) &&& 0xFF <<< (8 - remainder)))
   end
 
-  defp parse_ip(text) do
-    case :inet.parse_address(String.to_charlist(text)) do
-      {:ok, ip} -> {:ok, ip}
-      {:error, :einval} -> {:error, :hostname}
-      other -> other
-    end
-  end
-
-  defp tuple_family({a, _b, _c, _d}) when is_integer(a), do: :ipv4
-  defp tuple_family({_a, _b, _c, _d, _e, _f, _g, _h}), do: :ipv6
-  defp max_prefix(ip) when tuple_size(ip) == 4, do: 32
-  defp max_prefix(_ip), do: 128
+  defp parse_ip(text), do: :inet.parse_strict_address(String.to_charlist(text))
 
   defp prefix_from_netmask(mask) do
     width = if tuple_size(mask) == 4, do: 8, else: 16

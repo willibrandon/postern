@@ -25,8 +25,9 @@ defmodule Postern.PgHbaDiagnosticsTest do
       )
 
     messages = Enum.map(diagnostics, & &1.message)
-    assert Enum.any?(messages, &String.contains?(&1, "malformed CIDR"))
-    assert Enum.any?(messages, &String.contains?(&1, "netmask cannot be used with hostname"))
+    assert ~s(invalid CIDR mask in address "10.0.0.0/33") in messages
+    # A host name stands alone, so the netmask is read as the method.
+    assert ~s(invalid authentication method "255.255.255.0") in messages
 
     assert Enum.count(messages, &(&1 == ~s(clientcert can only be configured for "hostssl" rows))) ==
              2
@@ -173,6 +174,56 @@ defmodule Postern.PgHbaDiagnosticsTest do
 
     refute Enum.any?(Postern.PgHbaDiagnostics.diagnostics(text), missing)
     assert Enum.any?(Postern.PgHbaDiagnostics.diagnostics(text, ""), missing)
+  end
+
+  test "reads the address the way parse_hba_line reads it" do
+    text = """
+    host all all example.com/24 md5
+    host all all 10.0.0.0 ffff::0 md5
+    host all all 10.0.0.0 md5
+    host all all 10.0.0.0 255.255.0.1 md5
+    host all all 10.0.0.999 md5
+    host all all all 255.255.0.0 md5
+    """
+
+    diagnostics = Postern.PgHbaDiagnostics.diagnostics(text)
+
+    assert Enum.map(diagnostics, &{&1.range.start.line, &1.severity, &1.message}) == [
+             {0, 1, ~s(specifying both host name and CIDR mask is invalid: "example.com/24")},
+             {1, 1, "IP address and mask do not match"},
+             {2, 1, ~s(invalid IP mask "md5")},
+             {4, 2,
+              ~s("10.0.0.999" is not an IP address, so PostgreSQL takes it for a host name)},
+             {5, 1, ~s(invalid authentication method "255.255.0.0")}
+           ]
+  end
+
+  test "methods, directives and regular expressions follow the target version" do
+    errors = fn text ->
+      text
+      |> Postern.PgHbaDiagnostics.diagnostics()
+      |> Enum.map(&{&1.range.start.line, &1.severity, &1.message})
+    end
+
+    oauth = "host all all 10.0.0.0/8 oauth issuer=https://issuer scope=openid\n"
+
+    assert errors.("# postern: pg=17\n" <> oauth) == [
+             {1, 1, ~s(invalid authentication method "oauth")}
+           ]
+
+    assert errors.("# postern: pg=18\n" <> oauth) == []
+
+    assert errors.("host all all 10.0.0.0/8 scram-sha-256-plus\n") ==
+             [{0, 1, ~s(invalid authentication method "scram-sha-256-plus")}]
+
+    newer = "include_dir hba.d\nhost /^app_/ +ops 10.0.0.0/8 md5\n"
+
+    assert errors.("# postern: pg=15\n" <> newer) == [
+             {1, 1, ~s(invalid connection type "include_dir")},
+             {2, 2, ~s("/^app_/" is a name to PostgreSQL 15; a regular expression here needs 16)}
+           ]
+
+    assert errors.("# postern: pg=16\n" <> newer) == []
   end
 
   defp fixture!(name) do
