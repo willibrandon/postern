@@ -70,18 +70,39 @@ defmodule Postern.FileKind do
   end
 
   @doc """
-  Converts a `file://` URI to a filesystem path. If the input is not a URI,
-  it is returned unchanged.
+  Converts a `file://` URI to a filesystem path. A Windows drive comes back
+  as `c:/Users/...`, without the slash the URI puts before it, and a UNC
+  share keeps its host. Anything that is not a URI is returned unchanged.
   """
   @spec uri_to_path(String.t()) :: String.t()
-  def uri_to_path("file://" <> rest) do
-    # Handle file:// URI with possible triple slash file:///path
-    # URI parsing decodes percent-encoding for us
-    case URI.parse("file://" <> rest) do
-      %URI{path: path} when is_binary(path) -> URI.decode(path)
-      _ -> rest
-    end
+  def uri_to_path("file://" <> _rest = uri) do
+    %URI{path: path, host: host} = URI.parse(uri)
+    path = URI.decode(path || "")
+    path = if host in [nil, ""], do: path, else: "//" <> host <> path
+
+    if Regex.match?(~r{^/[A-Za-z]:(/|$)}, path),
+      do: String.slice(path, 1..-1//1),
+      else: path
   end
 
   def uri_to_path(path), do: path
+
+  @doc """
+  The `file://` URI for a path, with the slash a Windows drive needs before
+  it, as editors write it.
+  """
+  @spec path_to_uri(String.t()) :: String.t()
+  def path_to_uri(path) do
+    path = Path.expand(path)
+    encoded = URI.encode(path)
+    if String.starts_with?(path, "/"), do: "file://" <> encoded, else: "file:///" <> encoded
+  end
+
+  @doc """
+  One form for a path wherever it came from: absolute, with forward slashes
+  and one case for a Windows drive letter, so that a path from an editor's
+  URI and one the resolver built from an include line compare equal.
+  """
+  @spec canonical(String.t()) :: String.t()
+  def canonical(path), do: Path.expand(path)
 end

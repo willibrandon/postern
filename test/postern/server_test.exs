@@ -453,8 +453,8 @@ defmodule Postern.ServerTest do
       directory: directory
     } do
       File.write!(Path.join(directory, "pg_ident.conf"), "known root postgres\n")
-      hba_uri = "file://" <> Path.join(directory, "pg_hba.conf")
-      ident_uri = "file://" <> Path.join(directory, "pg_ident.conf")
+      hba_uri = Postern.FileKind.path_to_uri(Path.join(directory, "pg_hba.conf"))
+      ident_uri = Postern.FileKind.path_to_uri(Path.join(directory, "pg_ident.conf"))
 
       missing = fn diagnostics ->
         for %{"message" => m} <- diagnostics, m =~ "does not exist", do: m
@@ -551,9 +551,9 @@ defmodule Postern.ServerTest do
       File.write!(Path.join(directory, "conf.d/10-memory.conf"), "shared_buffrs = 256MB\n")
 
       %{
-        root: "file://" <> Path.join(directory, "postgresql.conf"),
-        included: "file://" <> Path.join(directory, "conf.d/10-memory.conf"),
-        extra: "file://" <> Path.join(directory, "extra.conf")
+        root: Postern.FileKind.path_to_uri(Path.join(directory, "postgresql.conf")),
+        included: Postern.FileKind.path_to_uri(Path.join(directory, "conf.d/10-memory.conf")),
+        extra: Postern.FileKind.path_to_uri(Path.join(directory, "extra.conf"))
       }
     end
 

@@ -92,7 +92,7 @@ defmodule Postern.CLI do
   defp check_file(file, path) do
     with {:ok, text} <- File.read(path),
          kind when kind != :unknown <- kind_of(path) do
-      uri = "file://" <> path
+      uri = FileKind.path_to_uri(path)
       diagnostics = Diagnostics.for_document(uri, text, %{reader: Files.disk(), kind: kind})
       {%{file: file, diagnostics: diagnostics}, ConfigTree.for_document(kind, path, Files.disk())}
     else

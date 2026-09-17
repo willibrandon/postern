@@ -4,9 +4,12 @@ defmodule Postern.ConfigTreeTest do
   alias Postern.ConfigTree
   alias Postern.Files
 
-  @etc "/etc/postgresql/16/main"
-  @root "/etc/postgresql/16/main/postgresql.conf"
-  @data "/var/lib/postgresql/16/main"
+  # Canonical on the machine running the tests, so a Windows drive prefix
+  # lands on both sides of every comparison.
+  @etc Path.expand("/etc/postgresql/16/main")
+  @root Path.expand("/etc/postgresql/16/main/postgresql.conf")
+  @data Path.expand("/var/lib/postgresql/16/main")
+  @pg Path.expand("/pg")
 
   defp files do
     Files.in_memory(%{
@@ -74,10 +77,10 @@ defmodule Postern.ConfigTreeTest do
       |> Enum.sort()
 
     assert losers == [
-             {"conf.d/10-memory.conf", 1, "/var/lib/postgresql/16/main/postgresql.auto.conf"},
+             {"conf.d/10-memory.conf", 1, "#{@data}/postgresql.auto.conf"},
              {"conf.d/Z.conf", 1, "postgresql.conf"},
              {"conf.d/a.conf", 1, "postgresql.conf"},
-             {"postgresql.conf", 2, "/var/lib/postgresql/16/main/postgresql.auto.conf"},
+             {"postgresql.conf", 2, "#{@data}/postgresql.auto.conf"},
              {"shared.conf", 1, "postgresql.conf"}
            ]
   end
@@ -85,31 +88,33 @@ defmodule Postern.ConfigTreeTest do
   test "a missing include, a missing include_dir and recursion are the server's errors" do
     files =
       Files.in_memory(%{
-        "/pg/postgresql.conf" =>
+        "#{@pg}/postgresql.conf" =>
           "include 'gone.conf'\ninclude_dir 'nowhere'\ninclude 'postgresql.conf'\n"
       })
 
-    tree = ConfigTree.resolve(:postgresql_conf, "/pg/postgresql.conf", files)
+    tree = ConfigTree.resolve(:postgresql_conf, "#{@pg}/postgresql.conf", files)
 
     assert Enum.map(tree.problems, &{&1.span.line, &1.severity, &1.message}) == [
-             {1, 1, ~s(could not open file "/pg/gone.conf")},
-             {2, 1, ~s(could not open directory "/pg/nowhere")},
+             {1, 1, ~s(could not open file "#{@pg}/gone.conf")},
+             {2, 1, ~s(could not open directory "#{@pg}/nowhere")},
              {3, 1, "configuration file recursion"}
            ]
   end
 
   test "nesting stops at ten levels, where the server stops" do
     chain =
-      for n <- 1..12, into: %{}, do: {"/pg/#{n}.conf", "include '#{n + 1}.conf'\nport = #{n}\n"}
+      for n <- 1..12,
+          into: %{},
+          do: {"#{@pg}/#{n}.conf", "include '#{n + 1}.conf'\nport = #{n}\n"}
 
-    files = Files.in_memory(Map.put(chain, "/pg/postgresql.conf", "include '1.conf'\n"))
+    files = Files.in_memory(Map.put(chain, "#{@pg}/postgresql.conf", "include '1.conf'\n"))
 
-    tree = ConfigTree.resolve(:postgresql_conf, "/pg/postgresql.conf", files)
+    tree = ConfigTree.resolve(:postgresql_conf, "#{@pg}/postgresql.conf", files)
 
     assert length(tree.files) == 11
 
-    assert [%{path: "/pg/10.conf", severity: 1, message: "nesting depth exceeded"}] =
-             tree.problems
+    tenth = "#{@pg}/10.conf"
+    assert [%{path: ^tenth, severity: 1, message: "nesting depth exceeded"}] = tree.problems
   end
 
   test "an included file belongs to the tree of the root above it, whatever it is called" do
@@ -134,33 +139,35 @@ defmodule Postern.ConfigTreeTest do
     File.write!(shared, "work_mem = 4MB\n")
 
     assert ConfigTree.root(:postgresql_conf, shared, Files.disk()) == nil
-    assert ConfigTree.root(:postgresql_conf, shared, Files.disk(), workspace: workspace) == root
+
+    assert ConfigTree.root(:postgresql_conf, shared, Files.disk(), workspace: workspace) ==
+             Path.expand(root)
   end
 
   test "pg_hba.conf and pg_ident.conf trees splice their includes in the same way" do
     files =
       Files.in_memory(%{
-        "/pg/pg_hba.conf" => "include_dir hba.d\nlocal all all peer\ninclude gone.conf\n",
-        "/pg/hba.d/10-app.conf" => "host app app 10.0.0.0/8 scram-sha-256\n",
-        "/pg/pg_ident.conf" => "include_if_exists maps.conf\n"
+        "#{@pg}/pg_hba.conf" => "include_dir hba.d\nlocal all all peer\ninclude gone.conf\n",
+        "#{@pg}/hba.d/10-app.conf" => "host app app 10.0.0.0/8 scram-sha-256\n",
+        "#{@pg}/pg_ident.conf" => "include_if_exists maps.conf\n"
       })
 
-    hba = ConfigTree.resolve(:pg_hba_conf, "/pg/pg_hba.conf", files)
-    assert hba.files == ["/pg/pg_hba.conf", "/pg/hba.d/10-app.conf"]
+    hba = ConfigTree.resolve(:pg_hba_conf, "#{@pg}/pg_hba.conf", files)
+    assert hba.files == ["#{@pg}/pg_hba.conf", "#{@pg}/hba.d/10-app.conf"]
 
     assert [%{entry: %{databases: ["app"]}}, %{entry: %{connection_type: "local"}}] =
              Enum.filter(hba.entries, &(&1.entry.type == :rule))
 
     assert [%{severity: 1, message: message}] = hba.problems
-    assert message == ~s(could not open file "/pg/gone.conf": No such file or directory)
+    assert message == ~s(could not open file "#{@pg}/gone.conf": No such file or directory)
 
     # An older target has no directives to follow.
-    old = ConfigTree.resolve(:pg_hba_conf, "/pg/pg_hba.conf", files, version: 15)
-    assert old.files == ["/pg/pg_hba.conf"]
+    old = ConfigTree.resolve(:pg_hba_conf, "#{@pg}/pg_hba.conf", files, version: 15)
+    assert old.files == ["#{@pg}/pg_hba.conf"]
     assert old.problems == []
 
-    ident = ConfigTree.resolve(:pg_ident_conf, "/pg/pg_ident.conf", files)
+    ident = ConfigTree.resolve(:pg_ident_conf, "#{@pg}/pg_ident.conf", files)
     assert [%{severity: 4, message: skipped}] = ident.problems
-    assert skipped == ~s(skipping missing authentication file "/pg/maps.conf")
+    assert skipped == ~s(skipping missing authentication file "#{@pg}/maps.conf")
   end
 end

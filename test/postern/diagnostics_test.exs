@@ -36,8 +36,8 @@ defmodule Postern.DiagnosticsTest do
     ident_path = Path.join(directory, "pg_ident.conf")
     File.write!(hba_path, "local all all peer map=known\nlocal all all ident map=missing\n")
     File.write!(ident_path, "known root postgres\nspare root postgres\n")
-    hba_uri = "file://" <> hba_path
-    ident_uri = "file://" <> ident_path
+    hba_uri = Postern.FileKind.path_to_uri(hba_path)
+    ident_uri = Postern.FileKind.path_to_uri(ident_path)
 
     messages = fn uri, path, reader ->
       Diagnostics.for_document(uri, File.read!(path), %{reader: reader})

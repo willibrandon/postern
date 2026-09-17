@@ -81,7 +81,10 @@ defmodule Postern.CLITest do
     assert output =~
              ~s(postgresql.conf:1:1: hint: overridden by a later entry in conf.d/10-memory.conf on line 1)
 
-    assert output =~ ~s(postgresql.conf:3:9: error: could not open file "#{directory}/gone.conf")
+    # A message names a file the way the resolver built it, in the one form
+    # every path takes, which on Windows is not the form the test joined.
+    canonical = Path.expand(directory)
+    assert output =~ ~s(postgresql.conf:3:9: error: could not open file "#{canonical}/gone.conf")
     assert output =~ ~s(10-memory.conf:2:1: error: unknown setting "shared_buffrs")
 
     # The included file on its own is checked through its root, and once

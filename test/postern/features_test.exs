@@ -60,7 +60,7 @@ defmodule Postern.FeaturesTest do
     test "definition goes to the assignment that counts", %{options: options} do
       {:ok, text} = options.reader.read.("/pg/postgresql.conf")
 
-      assert %GenLSP.Structures.Location{uri: "file:///pg/conf.d/10-memory.conf", range: range} =
+      assert %GenLSP.Structures.Location{uri: winner_uri, range: range} =
                Features.definition(
                  "file:///pg/postgresql.conf",
                  text,
@@ -68,6 +68,7 @@ defmodule Postern.FeaturesTest do
                  options
                )
 
+      assert winner_uri == Postern.FileKind.path_to_uri("/pg/conf.d/10-memory.conf")
       assert range.start == %Position{line: 0, character: 0}
       assert range.end == %Position{line: 0, character: 14}
 
@@ -82,8 +83,10 @@ defmodule Postern.FeaturesTest do
     test "include lines link to the files that are there", %{options: options} do
       {:ok, text} = options.reader.read.("/pg/postgresql.conf")
 
-      assert [%GenLSP.Structures.DocumentLink{target: "file:///pg/shared.conf", range: range}] =
+      assert [%GenLSP.Structures.DocumentLink{target: target, range: range}] =
                Features.document_links("file:///pg/postgresql.conf", text, options)
+
+      assert target == Postern.FileKind.path_to_uri("/pg/shared.conf")
 
       assert range.start == %Position{line: 1, character: 8}
       assert range.end == %Position{line: 1, character: 21}
