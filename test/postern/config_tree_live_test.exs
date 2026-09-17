@@ -114,14 +114,15 @@ defmodule Postern.ConfigTreeLiveTest do
       end
 
       # Every line the server took for a rule, valid or not, in the order it
-      # read them.
+      # read them; the parser refuses the same lines, as errors.
       rows = query!(conn, "select file_name, line_number from pg_hba_file_rules")
 
       resolved = ConfigTree.resolve(:pg_hba_conf, hba_file, server_files(conn))
 
       assert Enum.map(rows, &List.to_tuple/1) ==
                for(
-                 %{path: path, entry: %{type: :rule, span: span}} <- resolved.entries,
+                 %{path: path, entry: %{type: type, span: span}} <- resolved.entries,
+                 type in [:rule, :error],
                  do: {path, span.line}
                )
 
