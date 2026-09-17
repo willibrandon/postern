@@ -5,8 +5,6 @@ defmodule Postern.Application do
 
   @impl true
   def start(_type, _args) do
-    env = if Code.ensure_loaded?(Mix), do: Mix.env(), else: :prod
-
     args = runtime_args()
 
     cond do
@@ -21,9 +19,7 @@ defmodule Postern.Application do
     end
 
     children =
-      if env == :test do
-        []
-      else
+      if Application.get_env(:postern, :stdio, true) do
         [
           {GenLSP.Buffer, communication: {Postern.Stdio, []}, name: GenLSP.Buffer},
           {GenLSP.Assigns, name: GenLSP.Assigns},
@@ -35,6 +31,8 @@ defmodule Postern.Application do
              task_supervisor: Postern.TaskSupervisor
            ]}
         ]
+      else
+        []
       end
 
     opts = [strategy: :one_for_one, name: Postern.Supervisor]

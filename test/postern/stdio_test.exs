@@ -1,26 +1,14 @@
 defmodule Postern.StdioTest do
   use ExUnit.Case, async: false
 
-  test "speaks initialize and shutdown over stdio" do
-    mix = System.find_executable("mix")
+  # The server under test is a second VM on the build the suite runs on, so a
+  # fresh clone needs nothing but `mix test`. The transport is off in the test
+  # environment, since this VM keeps its own stdin, and the child turns it on.
+  @boot "Application.put_env(:postern, :stdio, true, persistent: true); " <>
+          "{:ok, _} = Application.ensure_all_started(:postern); Process.sleep(:infinity)"
 
-    port =
-      Port.open(
-        {:spawn_executable, mix},
-        [
-          :binary,
-          :exit_status,
-          {:args,
-           [
-             "run",
-             "--no-compile",
-             "--no-start",
-             "-e",
-             "Postern.Application.start(:normal, []); Process.sleep(:infinity)"
-           ]},
-          {:env, [{~c"MIX_ENV", ~c"dev"}]}
-        ]
-      )
+  test "speaks initialize and shutdown over stdio, then halts on exit" do
+    port = start_server()
 
     on_exit(fn ->
       if Port.info(port), do: Port.close(port)
@@ -45,30 +33,11 @@ defmodule Postern.StdioTest do
     assert %{"id" => 2, "result" => nil} = response
 
     Port.command(port, packet(%{"jsonrpc" => "2.0", "method" => "exit"}))
+    assert_receive {^port, {:exit_status, 0}}, 10_000
   end
 
-  @tag :unix
   test "halts as soon as the editor closes the pipe" do
-    mix = System.find_executable("mix")
-
-    port =
-      Port.open(
-        {:spawn_executable, mix},
-        [
-          :binary,
-          :exit_status,
-          {:args,
-           [
-             "run",
-             "--no-compile",
-             "--no-start",
-             "-e",
-             "Postern.Application.start(:normal, []); Process.sleep(:infinity)"
-           ]},
-          {:env, [{~c"MIX_ENV", ~c"dev"}]}
-        ]
-      )
-
+    port = start_server()
     {:os_pid, os_pid} = Port.info(port, :os_pid)
 
     Port.command(
@@ -90,15 +59,43 @@ defmodule Postern.StdioTest do
            "server kept running after its stdin closed (pid #{os_pid})"
   end
 
+  defp start_server do
+    Port.open(
+      {:spawn_executable, System.find_executable("mix")},
+      [
+        :binary,
+        :exit_status,
+        {:args, ["run", "--no-compile", "--no-start", "-e", @boot]},
+        {:env, [{~c"MIX_ENV", ~c"test"}]}
+      ]
+    )
+  end
+
   defp gone_within?(os_pid, timeout_ms) do
     deadline = System.monotonic_time(:millisecond) + timeout_ms
 
     Stream.repeatedly(fn ->
-      {_, status} = System.cmd("kill", ["-0", Integer.to_string(os_pid)], stderr_to_stdout: true)
-      status != 0 or (System.monotonic_time(:millisecond) > deadline and :timeout)
+      not alive?(os_pid) or (System.monotonic_time(:millisecond) > deadline and :timeout)
     end)
     |> Stream.each(fn done -> unless done, do: Process.sleep(100) end)
     |> Enum.find(&(&1 != false)) == true
+  end
+
+  # Whether an operating system process is still there, asked the way each
+  # system answers it.
+  defp alive?(os_pid) do
+    case :os.type() do
+      {:win32, _} ->
+        filter = "PID eq #{os_pid}"
+        {output, 0} = System.cmd("tasklist", ["/FI", filter, "/NH", "/FO", "CSV"])
+        String.contains?(output, ~s("#{os_pid}"))
+
+      _unix ->
+        {_, status} =
+          System.cmd("kill", ["-0", Integer.to_string(os_pid)], stderr_to_stdout: true)
+
+        status == 0
+    end
   end
 
   defp packet(payload) do

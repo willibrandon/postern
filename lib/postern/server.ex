@@ -284,9 +284,8 @@ defmodule Postern.Server do
   def handle_notification(%ExitNotification{}, lsp) do
     exit_code = Map.get(current_assigns(lsp), :exit_code, 0)
     test_mode = Map.get(current_assigns(lsp), :test_mode, false)
-    test_env = Code.ensure_loaded?(Mix) and Mix.env() == :test
 
-    unless test_mode or test_env do
+    unless test_mode do
       System.halt(exit_code)
     end
 
