@@ -1,9 +1,12 @@
 defmodule Postern.Features do
   @moduledoc """
-  Implements hover and completion features.
+  Implements hover, completion, definition and document links.
 
   PostgreSQL configuration metadata comes from generated catalogs. HBA
   completion keywords are protocol-level grammar terms, not setting metadata.
+  With a `:reader` from `Postern.Files` in the options, hover says where the
+  value that counts for a setting is set, definition goes there, and an
+  include line links to the file it names.
   """
 
   alias GenLSP.Enumerations.CodeActionKind
@@ -13,12 +16,16 @@ defmodule Postern.Features do
   alias GenLSP.Structures.Command
   alias GenLSP.Structures.CompletionItem
   alias GenLSP.Structures.CompletionList
+  alias GenLSP.Structures.DocumentLink
   alias GenLSP.Structures.Hover
+  alias GenLSP.Structures.Location
   alias GenLSP.Structures.MarkupContent
   alias GenLSP.Structures.Position
   alias GenLSP.Structures.Range
   alias Postern.Catalog
+  alias Postern.ConfigTree
   alias Postern.FileKind
+  alias Postern.Files
   alias Postern.Parser.PostgresqlConf
   alias Postern.PgHbaOptions
 
@@ -36,8 +43,46 @@ defmodule Postern.Features do
   @spec hover(String.t(), String.t(), Position.t(), map() | keyword()) :: Hover.t() | nil
   def hover(uri, text, position, options \\ %{}) do
     case option(options, :kind) || FileKind.detect(uri) do
-      :postgresql_conf -> postgresql_hover(text, position, options)
+      :postgresql_conf -> postgresql_hover(uri, text, position, options)
       _ -> nil
+    end
+  end
+
+  @doc """
+  Where the value that counts for the setting under the cursor is set, when
+  that is another line of the tree, or `nil`.
+  """
+  @spec definition(String.t(), String.t(), Position.t(), map() | keyword()) :: Location.t() | nil
+  def definition(uri, text, position, options \\ %{}) do
+    with :postgresql_conf <- option(options, :kind) || FileKind.detect(uri),
+         {:ok, entries} = PostgresqlConf.parse(text),
+         %{type: :assignment} = entry <- entry_at(entries, position),
+         %{path: path, entry: winner} <- elsewhere(uri, entry, options) do
+      %Location{uri: path_to_uri(path), range: span_to_range(winner.name_span)}
+    else
+      _ -> nil
+    end
+  end
+
+  @doc "Links from the include lines to the files they name, for the ones that are there."
+  @spec document_links(String.t(), String.t(), map() | keyword()) :: [DocumentLink.t()]
+  def document_links(uri, text, options \\ %{}) do
+    with kind when kind != :unknown <- option(options, :kind) || FileKind.detect(uri),
+         %Files{read: read} <- option(options, :reader) do
+      path = FileKind.uri_to_path(uri)
+      {:ok, entries} = ConfigTree.parse(kind, text)
+
+      for %{type: :include, directive: directive, file: file} = entry <- entries,
+          directive != "include_dir",
+          target = ConfigTree.absolute(file, path),
+          match?({:ok, _text}, read.(target)) do
+        %DocumentLink{
+          range: span_to_range(ConfigTree.include_span(entry)),
+          target: path_to_uri(target)
+        }
+      end
+    else
+      _ -> []
     end
   end
 
@@ -85,7 +130,7 @@ defmodule Postern.Features do
     %CompletionList{is_incomplete: false, items: items}
   end
 
-  defp postgresql_hover(text, position, options) do
+  defp postgresql_hover(uri, text, position, options) do
     {:ok, entries} = PostgresqlConf.parse(text)
 
     with %{type: :assignment, name: name} = entry <- entry_at(entries, position),
@@ -94,7 +139,9 @@ defmodule Postern.Features do
          catalog <- Catalog.load(version),
          setting when not is_nil(setting) <- Catalog.fetch(catalog, name) do
       first_version = first_version(name)
-      contents = hover_markdown(setting, version, first_version)
+
+      contents =
+        hover_markdown(setting, version, first_version) <> override_note(uri, entry, options)
 
       %Hover{
         contents: %MarkupContent{kind: MarkupKind.markdown(), value: contents},
@@ -130,6 +177,42 @@ defmodule Postern.Features do
 
     "### `#{setting["name"]}`\n\n#{description}\n\n#{details}#{note}"
   end
+
+  # Where the value that counts is set, when it is not this line.
+  defp override_note(uri, entry, options) do
+    case elsewhere(uri, entry, options) do
+      nil ->
+        ""
+
+      %{path: path, entry: winner} ->
+        where =
+          if path == FileKind.uri_to_path(uri),
+            do: "line #{winner.span.line}",
+            else:
+              "`#{ConfigTree.relative(path, FileKind.uri_to_path(uri))}` line #{winner.span.line}"
+
+        "\n\n**Overridden by:** #{where}, where it is `#{winner.raw_value}`"
+    end
+  end
+
+  # The assignment the tree keeps for this entry's name, when it is another one.
+  defp elsewhere(uri, entry, options) do
+    path = FileKind.uri_to_path(uri)
+
+    with %Files{} = files <- option(options, :reader),
+         tree =
+           ConfigTree.for_document(:postgresql_conf, path, files,
+             workspace: option(options, :workspace)
+           ),
+         %{path: winner_path, entry: winner} = located <- ConfigTree.winner(tree, entry.name),
+         false <- winner_path == path and winner.span.line == entry.span.line do
+      located
+    else
+      _ -> nil
+    end
+  end
+
+  defp path_to_uri(path), do: "file://" <> URI.encode(path)
 
   defp optional_detail(_label, nil), do: nil
   defp optional_detail(_label, ""), do: nil

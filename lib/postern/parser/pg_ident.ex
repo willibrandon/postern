@@ -6,7 +6,9 @@ defmodule Postern.Parser.PgIdent do
   system usernames and `\\1` substitution in `pg-username`.
 
   Include directives `include`, `include_if_exists`, `include_dir` are
-  also allowed.
+  also allowed. A token is quoted with double quotes, the only quote
+  character the server's tokenizer knows; a single quote is an ordinary
+  character.
 
   Every token carries a span.
   """
@@ -25,22 +27,10 @@ defmodule Postern.Parser.PgIdent do
     |> ignore(string("\""))
     |> unwrap_and_tag(:quoted)
 
-  sq_quoted =
-    ignore(string("'"))
-    |> repeat(
-      choice([
-        string("''") |> replace("'"),
-        utf8_string([not: ?'], min: 1)
-      ])
-    )
-    |> reduce({Enum, :join, [""]})
-    |> ignore(string("'"))
-    |> unwrap_and_tag(:quoted)
-
-  quoted_token = choice([dq_quoted, sq_quoted])
+  quoted_token = dq_quoted
 
   unquoted_token =
-    ascii_string([not: ?\s, not: ?\t, not: ?#, not: ?", not: ?'], min: 1)
+    ascii_string([not: ?\s, not: ?\t, not: ?#, not: ?"], min: 1)
     |> unwrap_and_tag(:unquoted)
 
   token = choice([quoted_token, unquoted_token])
@@ -140,7 +130,7 @@ defmodule Postern.Parser.PgIdent do
     end
   end
 
-  defp do_tokenize(<<c::utf8, rest::binary>>, acc, current, false, nil) when c in [?", ?'] do
+  defp do_tokenize(<<c::utf8, rest::binary>>, acc, current, false, nil) when c == ?" do
     do_tokenize(rest, acc, current <> <<c::utf8>>, true, c)
   end
 
@@ -222,17 +212,11 @@ defmodule Postern.Parser.PgIdent do
   end
 
   defp unquote_token(token) when is_binary(token) do
-    cond do
-      String.starts_with?(token, "\"") and String.ends_with?(token, "\"") and
-          String.length(token) >= 2 ->
-        token |> String.slice(1..-2//1) |> String.replace("\"\"", "\"")
-
-      String.starts_with?(token, "'") and String.ends_with?(token, "'") and
-          String.length(token) >= 2 ->
-        token |> String.slice(1..-2//1) |> String.replace("''", "'")
-
-      true ->
-        token
+    if String.starts_with?(token, "\"") and String.ends_with?(token, "\"") and
+         String.length(token) >= 2 do
+      token |> String.slice(1..-2//1) |> String.replace("\"\"", "\"")
+    else
+      token
     end
   end
 
@@ -246,7 +230,7 @@ defmodule Postern.Parser.PgIdent do
     {acc, "#" <> rest}
   end
 
-  defp do_split(<<c::utf8, rest::binary>>, acc, false, nil) when c in [?", ?'] do
+  defp do_split(<<c::utf8, rest::binary>>, acc, false, nil) when c == ?" do
     do_split(rest, acc <> <<c::utf8>>, true, c)
   end
 

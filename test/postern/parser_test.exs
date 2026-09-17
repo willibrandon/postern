@@ -72,7 +72,7 @@ defmodule Postern.ParserTest do
                local all all peer
                host db1,db2 user1,user2 192.168.0.0 255.255.0.0 ldap ldapserver=db.example.com
                hostssl all /^(app_.*)$/ 10.0.0.0/8 scram-sha-256
-               include 'extra/pg_hba.conf'
+               include "extra/pg_hba.conf"
                """)
 
       [local, host, hostssl, include] = Enum.filter(entries, &(&1.type in [:rule, :include]))
@@ -100,6 +100,21 @@ defmodule Postern.ParserTest do
       assert Enum.map(tokens, & &1.value) == ["host", "all", "all", "0.0.0.0/0", "trust"]
       assert Enum.map(tokens, & &1.span.col) == [1, 6, 10, 14, 24]
       assert Enum.all?(tokens, &(&1.span.line == 7))
+    end
+
+    test "quotes with double quotes only, as the server's tokenizer does" do
+      {:ok, entries} =
+        PgHba.parse("""
+        host "my db" "a,b" 10.0.0.0/8 md5
+        host 'db' all 10.0.0.0/8 md5
+        include_dir "hba.d"
+        """)
+
+      [quoted, single, include] = Enum.filter(entries, &(&1.type in [:rule, :include]))
+      assert quoted.databases == ["my db"]
+      assert quoted.users == ["a,b"]
+      assert single.databases == ["'db'"]
+      assert include.file == "hba.d"
     end
 
     test "reports invalid rule shape without crashing" do

@@ -3,7 +3,9 @@ defmodule Postern.CLI do
   Command-line checks for PostgreSQL configuration files.
   """
 
+  alias Postern.ConfigTree
   alias Postern.Diagnostics
+  alias Postern.FileKind
   alias Postern.Files
 
   @help_flags ~w(--help -h help)
@@ -16,8 +18,9 @@ defmodule Postern.CLI do
     postern --version
     postern --help
 
-  Files are recognised by name: postgresql.conf, postgresql.auto.conf,
-  pg_hba.conf and pg_ident.conf.
+  Files are recognised by name, postgresql.conf, postgresql.auto.conf,
+  pg_hba.conf and pg_ident.conf, or by the root that includes them. Checking
+  a root checks every file it reads.
   """
 
   @doc "Arguments that print information and exit instead of starting the server."
@@ -49,7 +52,7 @@ defmodule Postern.CLI do
         2
 
       true ->
-        results = Enum.map(files, &check_file/1)
+        results = check_files(files)
         print_results(results, options[:json] == true)
 
         if Enum.any?(results, &has_errors?/1), do: 1, else: 0
@@ -61,16 +64,55 @@ defmodule Postern.CLI do
     2
   end
 
-  defp check_file(file) do
-    path = Path.expand(file)
+  # Each file given, then the files a root among them reads that were not
+  # given themselves, once each.
+  defp check_files(files) do
+    given = MapSet.new(files, &Path.expand/1)
 
-    case File.read(path) do
-      {:ok, text} ->
-        uri = "file://" <> path
-        %{file: file, diagnostics: Diagnostics.for_document(uri, text, %{reader: Files.disk()})}
+    {results, _seen} =
+      Enum.flat_map_reduce(files, MapSet.new(), fn file, seen ->
+        path = Path.expand(file)
+        {result, tree} = check_file(file, path)
 
+        included =
+          if tree && tree.root == path,
+            do: Enum.reject(tree.files, &(&1 == path or &1 in given or &1 in seen)),
+            else: []
+
+        results = [
+          result | Enum.map(included, &elem(check_file(Path.relative_to_cwd(&1), &1), 0))
+        ]
+
+        {results, seen |> MapSet.put(path) |> MapSet.union(MapSet.new(included))}
+      end)
+
+    results
+  end
+
+  defp check_file(file, path) do
+    with {:ok, text} <- File.read(path),
+         kind when kind != :unknown <- kind_of(path) do
+      uri = "file://" <> path
+      diagnostics = Diagnostics.for_document(uri, text, %{reader: Files.disk(), kind: kind})
+      {%{file: file, diagnostics: diagnostics}, ConfigTree.for_document(kind, path, Files.disk())}
+    else
       {:error, reason} ->
-        %{file: file, diagnostics: [], error: "#{file}: #{:file.format_error(reason)}"}
+        {%{file: file, diagnostics: [], error: "#{file}: #{:file.format_error(reason)}"}, nil}
+
+      :unknown ->
+        {%{
+           file: file,
+           diagnostics: [],
+           error:
+             "#{file}: not one of PostgreSQL's configuration files, and no postgresql.conf, pg_hba.conf or pg_ident.conf includes it"
+         }, nil}
+    end
+  end
+
+  defp kind_of(path) do
+    case FileKind.detect(path) do
+      :unknown -> ConfigTree.kind_of(path, Files.disk())
+      kind -> kind
     end
   end
 

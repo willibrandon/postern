@@ -38,6 +38,92 @@ defmodule Postern.LiveDiagnosticsTest do
     assert diagnostic.message =~ "offline diagnostics"
   end
 
+  test "a row the view left unapplied without an error lost to the applied one" do
+    snapshot = %{
+      settings: [],
+      file_settings: [
+        %{
+          "sourcefile" => "/pg/postgresql.conf",
+          "sourceline" => 3,
+          "name" => "work_mem",
+          "applied" => false,
+          "error" => nil
+        },
+        %{
+          "sourcefile" => "/pg/conf.d/10-memory.conf",
+          "sourceline" => 1,
+          "name" => "work_mem",
+          "applied" => true,
+          "error" => nil
+        },
+        %{
+          "sourcefile" => "/pg/postgresql.conf",
+          "sourceline" => 5,
+          "name" => "port",
+          "applied" => false,
+          "error" => nil
+        },
+        %{
+          "sourcefile" => "/pg/postgresql.conf",
+          "sourceline" => 9,
+          "name" => "port",
+          "applied" => true,
+          "error" => nil
+        },
+        %{
+          "sourcefile" => "/pg/postgresql.conf",
+          "sourceline" => 7,
+          "name" => "shared_buffers",
+          "applied" => false,
+          "error" => "setting could not be applied"
+        }
+      ]
+    }
+
+    diagnostics = LiveDiagnostics.for_document("file:///pg/postgresql.conf", snapshot, true)
+
+    overrides =
+      for %{code: "override"} = d <- diagnostics, do: {d.range.start.line, d.severity, d.message}
+
+    assert overrides == [
+             {2, 4, "overridden by a later entry in conf.d/10-memory.conf on line 1"},
+             {4, 4, "overridden by a later entry on line 9"}
+           ]
+
+    # A syntax error leaves every row unapplied with no winner to point at.
+    broken = %{
+      settings: [],
+      file_settings: [
+        %{
+          "sourcefile" => "/pg/postgresql.conf",
+          "sourceline" => 1,
+          "name" => "work_mem",
+          "applied" => false,
+          "error" => nil
+        },
+        %{
+          "sourcefile" => "/pg/postgresql.conf",
+          "sourceline" => 2,
+          "name" => "work_mem",
+          "applied" => false,
+          "error" => nil
+        },
+        %{
+          "sourcefile" => "/pg/postgresql.conf",
+          "sourceline" => 3,
+          "name" => "bogus",
+          "applied" => false,
+          "error" => "unrecognized configuration parameter \"bogus\""
+        }
+      ]
+    }
+
+    refute Enum.any?(
+             LiveDiagnostics.for_document("file:///pg/postgresql.conf", broken, true),
+             &(&1.code == "override")
+           )
+  end
+
   test "maps live HBA and ident rule errors" do
     hba = %{
       hba_rules: [

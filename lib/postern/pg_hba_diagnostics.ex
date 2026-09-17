@@ -5,11 +5,18 @@ defmodule Postern.PgHbaDiagnostics do
   The parser supplies the rule AST. This module validates addresses and
   netmasks, authentication options, unsafe methods, rule reachability, and
   ident-map references.
+
+  With a `:tree` from `Postern.ConfigTree` and the document's `:path` in the
+  options, a rule is weighed against every rule the server reads before it,
+  in this file or one included earlier, and an include the server could not
+  follow gets its error. An `:ident_tree` supplies the maps from the whole
+  `pg_ident.conf` tree.
   """
 
   alias GenLSP.Structures.Diagnostic
   alias GenLSP.Structures.Position
   alias GenLSP.Structures.Range
+  alias Postern.ConfigTree
   alias Postern.Parser.PgHba
   alias Postern.Parser.PgIdent
   alias Postern.PgHbaOptions
@@ -35,26 +42,44 @@ defmodule Postern.PgHbaDiagnostics do
   @spec diagnostics(String.t(), String.t() | nil, map()) :: [Diagnostic.t()]
   def diagnostics(text, ident_text \\ nil, options \\ %{}) when is_binary(text) do
     {:ok, entries} = PgHba.parse(text)
-    parse_diagnostics = parser_diagnostics(entries)
-    rules = Enum.filter(entries, &(&1.type == :rule))
-    maps = ident_maps(ident_text)
+    tree = Map.get(options, :tree)
+    path = if tree, do: Map.get(options, :path)
+    maps = ident_maps(ident_text, Map.get(options, :ident_tree))
     report_trust = Map.get(options, :report_trust, true)
     version = Map.get(options, :version) || target_version(text, options)
+    rules = located_rules(tree, entries)
 
     rule_diagnostics =
       rules
       |> Enum.with_index()
-      |> Enum.flat_map(fn {rule, index} ->
-        previous = Enum.take(rules, index)
+      |> Enum.flat_map(fn
+        {%{path: ^path, entry: rule}, index} ->
+          address_diagnostics(rule) ++
+            option_diagnostics(rule, version) ++
+            unsafe_method_diagnostics(rule, report_trust) ++
+            ident_reference_diagnostics(rule, maps, version) ++
+            shadow_diagnostics(rule, path, Enum.take(rules, index))
 
-        address_diagnostics(rule) ++
-          option_diagnostics(rule, version) ++
-          unsafe_method_diagnostics(rule, report_trust) ++
-          ident_reference_diagnostics(rule, maps, version) ++
-          shadow_diagnostics(rule, previous)
+        _elsewhere ->
+          []
       end)
 
-    parse_diagnostics ++ rule_diagnostics
+    parser_diagnostics(entries) ++ rule_diagnostics ++ include_diagnostics(tree, path)
+  end
+
+  # The rules in the order PostgreSQL reads them: this file's alone, or the
+  # whole tree's with the file each one came from.
+  defp located_rules(nil, entries),
+    do: for(%{type: :rule} = rule <- entries, do: %{path: nil, entry: rule})
+
+  defp located_rules(tree, _entries),
+    do: for(%{entry: %{type: :rule}} = located <- tree.entries, do: located)
+
+  defp include_diagnostics(nil, _path), do: []
+
+  defp include_diagnostics(tree, path) do
+    for %{path: ^path} = problem <- tree.problems,
+        do: diagnostic(problem.span, problem.severity, problem.message)
   end
 
   defp parser_diagnostics(entries) do
@@ -197,31 +222,29 @@ defmodule Postern.PgHbaDiagnostics do
     end
   end
 
-  defp shadow_diagnostics(_rule, []), do: []
+  defp shadow_diagnostics(_rule, _path, []), do: []
 
-  defp shadow_diagnostics(rule, previous) do
-    case Enum.find(previous, &superset?(&1, rule)) do
-      %{auth_method: "reject"} ->
+  defp shadow_diagnostics(rule, path, previous) do
+    case Enum.find(previous, &superset?(&1.entry, rule)) do
+      nil ->
+        []
+
+      %{path: earlier_path, entry: earlier} ->
+        what = if earlier.auth_method == "reject", do: "reject rule", else: "rule"
+        line = earlier.span.line
+
+        where =
+          if earlier_path == path,
+            do: "on line #{line}",
+            else: "in #{ConfigTree.relative(earlier_path, path)} on line #{line}"
+
         [
           diagnostic(
             rule.span,
             @warning,
-            "rule can never match because an earlier reject rule shadows it"
+            "rule can never match because an earlier #{what} #{where} shadows it"
           )
         ]
-
-      _earlier ->
-        if Enum.any?(previous, &superset?(&1, rule)) do
-          [
-            diagnostic(
-              rule.span,
-              @warning,
-              "rule can never match because an earlier rule shadows it"
-            )
-          ]
-        else
-          []
-        end
     end
   end
 
@@ -353,9 +376,14 @@ defmodule Postern.PgHbaDiagnostics do
   defp target_version(text, options),
     do: Postern.PostgresqlConfDiagnostics.target_version(text, options)
 
-  defp ident_maps(nil), do: nil
+  # The maps the rules can name: every mapping in the pg_ident.conf tree, or
+  # in the text the caller supplied, or nothing to check against.
+  defp ident_maps(_text, %{entries: entries}),
+    do: MapSet.new(for(%{entry: %{type: :mapping, map: map}} <- entries, do: map))
 
-  defp ident_maps(text) do
+  defp ident_maps(nil, nil), do: nil
+
+  defp ident_maps(text, nil) do
     {:ok, entries} = PgIdent.parse(text)
 
     entries

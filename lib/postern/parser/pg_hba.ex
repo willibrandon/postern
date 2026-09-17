@@ -9,7 +9,9 @@ defmodule Postern.Parser.PgHba do
 
   PostgreSQL 16 added `include`, `include_if_exists` and
   `include_dir` here too, and regexes prefixed with `/` in database
-  and user fields. Quoted tokens and comma-separated lists apply.
+  and user fields. A token is quoted with double quotes, the only
+  quote character the server's tokenizer knows; a single quote is an
+  ordinary character. Comma-separated lists apply.
 
   Every token carries a span.
   """
@@ -17,7 +19,6 @@ defmodule Postern.Parser.PgHba do
   import NimbleParsec
 
   # Quoted strings for pg_hba — double quotes with "" => "
-  # Also handle single quotes for robustness
   dq_quoted_content =
     repeat(
       choice([
@@ -33,27 +34,12 @@ defmodule Postern.Parser.PgHba do
     |> ignore(string("\""))
     |> unwrap_and_tag(:quoted)
 
-  sq_quoted_content =
-    repeat(
-      choice([
-        string("''") |> replace("'"),
-        utf8_string([not: ?'], min: 1)
-      ])
-    )
-    |> reduce({Enum, :join, [""]})
-
-  sq_quoted =
-    ignore(string("'"))
-    |> concat(sq_quoted_content)
-    |> ignore(string("'"))
-    |> unwrap_and_tag(:quoted)
-
-  quoted_token = choice([dq_quoted, sq_quoted])
+  quoted_token = dq_quoted
 
   # Unquoted token: up to whitespace, #, comma? Actually comma is separator inside list,
   # but we keep it as part of token; later split. So unquoted token is run of non-space, non-# , non-quote
   unquoted_token =
-    ascii_string([not: ?\s, not: ?\t, not: ?#, not: ?", not: ?'], min: 1)
+    ascii_string([not: ?\s, not: ?\t, not: ?#, not: ?"], min: 1)
     |> unwrap_and_tag(:unquoted)
 
   token = choice([quoted_token, unquoted_token])
@@ -161,7 +147,7 @@ defmodule Postern.Parser.PgHba do
     end
   end
 
-  defp do_tokenize(<<c::utf8, rest::binary>>, acc, current, false, nil) when c in [?", ?'] do
+  defp do_tokenize(<<c::utf8, rest::binary>>, acc, current, false, nil) when c == ?" do
     # start quote
     do_tokenize(rest, acc, current <> <<c::utf8>>, true, c)
   end
@@ -344,15 +330,26 @@ defmodule Postern.Parser.PgHba do
     %{type: :error, message: message, span: span_for(line_no, 1, raw_line), raw: raw_line}
   end
 
+  # A comma separates the names in a field, unless it is inside double
+  # quotes, where it is part of the name, as in the server's tokenizer.
   defp split_list(raw) do
-    # Handle quoted and comma-separated. For simplicity, split by comma outside quotes?
-    # Assume raw is already a token (may contain commas) — split by comma
     raw
-    |> String.split(",")
+    |> split_outside_quotes("", [], false)
     |> Enum.map(&String.trim/1)
     |> Enum.map(&unquote_token/1)
     |> Enum.reject(&(&1 == ""))
   end
+
+  defp split_outside_quotes("", current, acc, _in_quote), do: Enum.reverse([current | acc])
+
+  defp split_outside_quotes(<<?,, rest::binary>>, current, acc, false),
+    do: split_outside_quotes(rest, "", [current | acc], false)
+
+  defp split_outside_quotes(<<?", rest::binary>>, current, acc, in_quote),
+    do: split_outside_quotes(rest, current <> "\"", acc, not in_quote)
+
+  defp split_outside_quotes(<<c::utf8, rest::binary>>, current, acc, in_quote),
+    do: split_outside_quotes(rest, current <> <<c::utf8>>, acc, in_quote)
 
   defp parse_options(opts, _raw_line, _line_no) do
     # Options are name=value
@@ -365,21 +362,13 @@ defmodule Postern.Parser.PgHba do
   end
 
   defp unquote_token(token) when is_binary(token) do
-    cond do
-      String.starts_with?(token, "\"") and String.ends_with?(token, "\"") and
-          String.length(token) >= 2 ->
-        token
-        |> String.slice(1..-2//1)
-        |> String.replace("\"\"", "\"")
-
-      String.starts_with?(token, "'") and String.ends_with?(token, "'") and
-          String.length(token) >= 2 ->
-        token
-        |> String.slice(1..-2//1)
-        |> String.replace("''", "'")
-
-      true ->
-        token
+    if String.starts_with?(token, "\"") and String.ends_with?(token, "\"") and
+         String.length(token) >= 2 do
+      token
+      |> String.slice(1..-2//1)
+      |> String.replace("\"\"", "\"")
+    else
+      token
     end
   end
 
@@ -393,7 +382,7 @@ defmodule Postern.Parser.PgHba do
     {acc, "#" <> rest}
   end
 
-  defp do_split(<<c::utf8, rest::binary>>, acc, false, nil) when c in [?", ?'] do
+  defp do_split(<<c::utf8, rest::binary>>, acc, false, nil) when c == ?" do
     do_split(rest, acc <> <<c::utf8>>, true, c)
   end
 

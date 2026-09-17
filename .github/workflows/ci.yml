@@ -52,6 +52,11 @@ jobs:
       - run: mix deps.get
       - run: mix compile --warnings-as-errors
       - run: mix test
+      - name: Compare the include tree with pg_file_settings on the server
+        run: mix test --only live
+        env:
+          PGHOST: 127.0.0.1
+          PGUSER: postgres
       - run: mix credo --strict
       - run: mix format --check-formatted
 

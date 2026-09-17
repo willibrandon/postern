@@ -525,6 +525,152 @@ defmodule Postern.ServerTest do
     end
   end
 
+  describe "the tree of files the server reads" do
+    setup %{client: client} do
+      request(client, %{
+        "jsonrpc" => "2.0",
+        "id" => 500,
+        "method" => "initialize",
+        "params" => %{"processId" => nil, "rootUri" => nil, "capabilities" => %{}}
+      })
+
+      assert_result(500, _)
+
+      directory =
+        Path.join(System.tmp_dir!(), "postern-tree-#{System.unique_integer([:positive])}")
+
+      File.mkdir_p!(Path.join(directory, "conf.d"))
+      on_exit(fn -> File.rm_rf!(directory) end)
+
+      File.write!(
+        Path.join(directory, "postgresql.conf"),
+        "shared_buffers = 128MB\ninclude 'extra.conf'\ninclude_dir 'conf.d'\n"
+      )
+
+      File.write!(Path.join(directory, "extra.conf"), "work_mem = 4MB\n")
+      File.write!(Path.join(directory, "conf.d/10-memory.conf"), "shared_buffrs = 256MB\n")
+
+      %{
+        root: "file://" <> Path.join(directory, "postgresql.conf"),
+        included: "file://" <> Path.join(directory, "conf.d/10-memory.conf"),
+        extra: "file://" <> Path.join(directory, "extra.conf")
+      }
+    end
+
+    test "a file the root includes is checked as one of its kind, and the root follows it", %{
+      server: server,
+      client: client,
+      root: root,
+      included: included,
+      extra: extra
+    } do
+      messages = fn diagnostics -> for %{"message" => message} <- diagnostics, do: message end
+
+      notify(client, %{
+        "jsonrpc" => "2.0",
+        "method" => "textDocument/didOpen",
+        "params" => %{
+          "textDocument" => %{
+            "uri" => included,
+            "languageId" => "plaintext",
+            "version" => 1,
+            "text" => "shared_buffrs = 256MB\n"
+          }
+        }
+      })
+
+      assert_notification("textDocument/publishDiagnostics", %{
+        "uri" => ^included,
+        "diagnostics" => [%{"message" => misspelled}]
+      })
+
+      assert misspelled =~ ~s(did you mean "shared_buffers")
+      assert server_assigns(server)[:documents][included].kind == :postgresql_conf
+
+      notify(client, %{
+        "jsonrpc" => "2.0",
+        "method" => "textDocument/didOpen",
+        "params" => %{
+          "textDocument" => %{
+            "uri" => root,
+            "languageId" => "postgresql-conf",
+            "version" => 1,
+            "text" => "shared_buffers = 128MB\ninclude 'extra.conf'\ninclude_dir 'conf.d'\n"
+          }
+        }
+      })
+
+      assert_notification("textDocument/publishDiagnostics", %{
+        "uri" => ^root,
+        "diagnostics" => before
+      })
+
+      refute Enum.any?(messages.(before), &String.contains?(&1, "overridden"))
+      # Opening the root checks the included file again, with the same result.
+      assert_notification("textDocument/publishDiagnostics", %{
+        "uri" => ^included,
+        "diagnostics" => [_]
+      })
+
+      notify(client, %{
+        "jsonrpc" => "2.0",
+        "method" => "textDocument/didChange",
+        "params" => %{
+          "textDocument" => %{"uri" => included, "version" => 2},
+          "contentChanges" => [%{"text" => "shared_buffers = 256MB\n"}]
+        }
+      })
+
+      assert_notification("textDocument/publishDiagnostics", %{
+        "uri" => ^included,
+        "diagnostics" => []
+      })
+
+      assert_notification("textDocument/publishDiagnostics", %{
+        "uri" => ^root,
+        "diagnostics" => after_edit
+      })
+
+      assert [
+               %{
+                 "code" => "override",
+                 "severity" => 4,
+                 "message" => message,
+                 "range" => %{"start" => %{"line" => 0}}
+               }
+             ] =
+               Enum.filter(after_edit, &(&1["code"] == "override"))
+
+      assert message == "overridden by a later entry in conf.d/10-memory.conf on line 1"
+
+      request(client, %{
+        "jsonrpc" => "2.0",
+        "id" => 501,
+        "method" => "textDocument/definition",
+        "params" => %{
+          "textDocument" => %{"uri" => root},
+          "position" => %{"line" => 0, "character" => 3}
+        }
+      })
+
+      assert_result(501, %{
+        "uri" => ^included,
+        "range" => %{"start" => %{"line" => 0, "character" => 0}}
+      })
+
+      request(client, %{
+        "jsonrpc" => "2.0",
+        "id" => 502,
+        "method" => "textDocument/documentLink",
+        "params" => %{"textDocument" => %{"uri" => root}}
+      })
+
+      assert_result(502, [
+        %{"target" => ^extra, "range" => %{"start" => %{"line" => 1, "character" => 8}}}
+      ])
+    end
+  end
+
   describe "JSON-RPC pipe behavior" do
     test "initialize over TCP (simulates pipe) returns capabilities", %{
       server: _server,

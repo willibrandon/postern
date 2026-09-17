@@ -54,7 +54,7 @@ defmodule Postern.LiveDiagnostics do
         )
       end)
 
-    file_diagnostics ++ restart_diagnostics
+    file_diagnostics ++ restart_diagnostics ++ override_diagnostics(file_settings, uri)
   end
 
   def for_document(uri, %{hba_rules: rows}, _configured, :pg_hba_conf),
@@ -72,6 +72,35 @@ defmodule Postern.LiveDiagnostics do
       end
     end)
   end
+
+  # A row that is not applied and carries no error lost to a later entry for
+  # the same name, as the view's documentation puts it, and the applied row
+  # for that name is the one that won. A syntax error anywhere leaves every
+  # row unapplied with no winner, and then there is nothing to say.
+  defp override_diagnostics(file_settings, uri) do
+    for row <- file_settings,
+        not truthy?(row["applied"]),
+        not error?(row),
+        same_file?(row["sourcefile"], uri),
+        winner = Enum.find(file_settings, &(&1["name"] == row["name"] and truthy?(&1["applied"]))),
+        winner != nil do
+      %{diagnostic(row["sourceline"] || 1, override_message(row, winner), 4) | code: "override"}
+    end
+  end
+
+  defp override_message(row, winner) do
+    file = to_string(winner["sourcefile"])
+    line = winner["sourceline"]
+
+    if file == to_string(row["sourcefile"]) do
+      "overridden by a later entry on line #{line}"
+    else
+      relative = Path.relative_to(file, Path.dirname(to_string(row["sourcefile"])))
+      "overridden by a later entry in #{relative} on line #{line}"
+    end
+  end
+
+  defp error?(row), do: is_binary(row["error"]) and row["error"] != ""
 
   defp same_file?(nil, _uri), do: false
 

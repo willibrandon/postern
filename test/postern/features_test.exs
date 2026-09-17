@@ -19,6 +19,77 @@ defmodule Postern.FeaturesTest do
     assert value =~ "takes effect after a server restart"
   end
 
+  describe "with the tree of files the server reads" do
+    setup do
+      files =
+        Postern.Files.in_memory(%{
+          "/pg/postgresql.conf" =>
+            "shared_buffers = 128MB\ninclude 'shared.conf'\ninclude_dir 'conf.d'\ninclude_if_exists 'gone.conf'\n",
+          "/pg/shared.conf" => "work_mem = 4MB\n",
+          "/pg/conf.d/10-memory.conf" => "shared_buffers = 256MB\n"
+        })
+
+      %{files: files, options: %{"pg" => 16, reader: files}}
+    end
+
+    test "hover says where the value that counts is set", %{options: options} do
+      {:ok, text} = options.reader.read.("/pg/postgresql.conf")
+
+      %{contents: %{value: value}} =
+        Features.hover(
+          "file:///pg/postgresql.conf",
+          text,
+          %Position{line: 0, character: 3},
+          options
+        )
+
+      assert value =~ "**Overridden by:** `conf.d/10-memory.conf` line 1, where it is `256MB`"
+
+      # An included file's kind comes from the server, not its name.
+      %{contents: %{value: winner}} =
+        Features.hover(
+          "file:///pg/conf.d/10-memory.conf",
+          "shared_buffers = 256MB\n",
+          %Position{line: 0, character: 3},
+          Map.put(options, :kind, :postgresql_conf)
+        )
+
+      refute winner =~ "Overridden"
+    end
+
+    test "definition goes to the assignment that counts", %{options: options} do
+      {:ok, text} = options.reader.read.("/pg/postgresql.conf")
+
+      assert %GenLSP.Structures.Location{uri: "file:///pg/conf.d/10-memory.conf", range: range} =
+               Features.definition(
+                 "file:///pg/postgresql.conf",
+                 text,
+                 %Position{line: 0, character: 3},
+                 options
+               )
+
+      assert range.start == %Position{line: 0, character: 0}
+      assert range.end == %Position{line: 0, character: 14}
+
+      assert Features.definition(
+               "file:///pg/conf.d/10-memory.conf",
+               "shared_buffers = 256MB\n",
+               %Position{line: 0, character: 3},
+               Map.put(options, :kind, :postgresql_conf)
+             ) == nil
+    end
+
+    test "include lines link to the files that are there", %{options: options} do
+      {:ok, text} = options.reader.read.("/pg/postgresql.conf")
+
+      assert [%GenLSP.Structures.DocumentLink{target: "file:///pg/shared.conf", range: range}] =
+               Features.document_links("file:///pg/postgresql.conf", text, options)
+
+      assert range.start == %Position{line: 1, character: 8}
+      assert range.end == %Position{line: 1, character: 21}
+    end
+  end
+
   test "postgresql.conf completion offers setting names and enum values" do
     name_items =
       Features.completion(

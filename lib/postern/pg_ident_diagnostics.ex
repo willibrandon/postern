@@ -8,6 +8,7 @@ defmodule Postern.PgIdentDiagnostics do
   alias GenLSP.Structures.Range
   alias Postern.Parser.PgHba
   alias Postern.Parser.PgIdent
+  alias Postern.PgHbaOptions
 
   @warning 2
   @error 1
@@ -17,12 +18,16 @@ defmodule Postern.PgIdentDiagnostics do
 
   `hba_text` is the `pg_hba.conf` that goes with the file, when there is one
   to look at; without it no map is called unused. `options` may carry the
-  target PostgreSQL major version as `:version`.
+  target PostgreSQL major version as `:version`, and, from
+  `Postern.ConfigTree`, the file's `:tree` with its `:path` and the
+  `:hba_tree` whose rules name the maps.
   """
   @spec diagnostics(String.t(), String.t() | nil, map()) :: [Diagnostic.t()]
   def diagnostics(text, hba_text \\ nil, options \\ %{}) when is_binary(text) do
     {:ok, entries} = PgIdent.parse(text)
     version = Map.get(options, :version) || target_version(text, options)
+    tree = Map.get(options, :tree)
+    path = Map.get(options, :path)
 
     parser_diagnostics =
       Enum.flat_map(entries, fn
@@ -30,7 +35,17 @@ defmodule Postern.PgIdentDiagnostics do
         _ -> []
       end)
 
-    parser_diagnostics ++ unused_diagnostics(entries, referenced_maps(hba_text, version))
+    referenced = referenced_maps(hba_text, Map.get(options, :hba_tree), version)
+
+    parser_diagnostics ++
+      unused_diagnostics(entries, referenced) ++ include_diagnostics(tree, path)
+  end
+
+  defp include_diagnostics(nil, _path), do: []
+
+  defp include_diagnostics(tree, path) do
+    for %{path: ^path} = problem <- tree.problems,
+        do: diagnostic(problem.span, problem.severity, problem.message)
   end
 
   defp unused_diagnostics(_entries, nil), do: []
@@ -47,11 +62,24 @@ defmodule Postern.PgIdentDiagnostics do
   defp target_version(text, options),
     do: Postern.PostgresqlConfDiagnostics.target_version(text, options)
 
-  defp referenced_maps(nil, _version), do: nil
+  # The maps the rules name: across the pg_hba.conf tree, or in the text the
+  # caller supplied, or nothing to check against.
+  defp referenced_maps(_text, %{entries: entries}, version) do
+    map_methods = PgHbaOptions.map_methods(version)
 
-  defp referenced_maps(text, version) do
+    MapSet.new(
+      for %{entry: %{type: :rule, auth_method: method, options: options}} <- entries,
+          method in map_methods,
+          is_binary(options["map"]),
+          do: options["map"]
+    )
+  end
+
+  defp referenced_maps(nil, nil, _version), do: nil
+
+  defp referenced_maps(text, nil, version) do
     {:ok, entries} = PgHba.parse(text)
-    map_methods = Postern.PgHbaOptions.map_methods(version)
+    map_methods = PgHbaOptions.map_methods(version)
 
     entries
     |> Enum.filter(&(&1.type == :rule and &1.auth_method in map_methods))

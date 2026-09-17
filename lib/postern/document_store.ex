@@ -42,10 +42,14 @@ defmodule Postern.DocumentStore do
 
   @doc """
   Stores a document, overwriting any existing entry.
+
+  The kind is the one given, or else the one the name and the language
+  identifier say.
   """
-  @spec put(GenLSP.LSP.t(), uri(), String.t(), integer(), String.t()) :: GenLSP.LSP.t()
-  def put(lsp, uri, text, version, language_id \\ "") do
-    kind = FileKind.detect(uri, language_id)
+  @spec put(GenLSP.LSP.t(), uri(), String.t(), integer(), String.t(), FileKind.t() | nil) ::
+          GenLSP.LSP.t()
+  def put(lsp, uri, text, version, language_id \\ "", kind \\ nil) do
+    kind = kind || FileKind.detect(uri, language_id)
 
     doc = %{
       uri: uri,

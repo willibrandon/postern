@@ -25,10 +25,13 @@ defmodule Postern.Server do
   alias GenLSP.Requests.Shutdown
   alias GenLSP.Requests.TextDocumentCodeAction
   alias GenLSP.Requests.TextDocumentCompletion
+  alias GenLSP.Requests.TextDocumentDefinition
+  alias GenLSP.Requests.TextDocumentDocumentLink
   alias GenLSP.Requests.TextDocumentHover
   alias GenLSP.Requests.TextDocumentInlayHint
   alias GenLSP.Requests.WorkspaceExecuteCommand
   alias GenLSP.Structures.CompletionOptions
+  alias GenLSP.Structures.DocumentLinkOptions
   alias GenLSP.Structures.ExecuteCommandOptions
   alias GenLSP.Structures.InitializeParams
   alias GenLSP.Structures.InitializeResult
@@ -36,6 +39,7 @@ defmodule Postern.Server do
   alias GenLSP.Structures.SaveOptions
   alias GenLSP.Structures.ServerCapabilities
   alias GenLSP.Structures.TextDocumentSyncOptions
+  alias Postern.ConfigTree
   alias Postern.Diagnostics
   alias Postern.DocumentStore
   alias Postern.Features
@@ -118,6 +122,8 @@ defmodule Postern.Server do
         },
         hover_provider: true,
         completion_provider: %CompletionOptions{trigger_characters: [".", "="]},
+        definition_provider: true,
+        document_link_provider: %DocumentLinkOptions{resolve_provider: false},
         inlay_hint_provider: true,
         code_action_provider: true,
         execute_command_provider: %ExecuteCommandOptions{commands: Features.commands()}
@@ -164,6 +170,41 @@ defmodule Postern.Server do
 
         nil ->
           nil
+      end
+
+    {:reply, reply, lsp}
+  end
+
+  def handle_request(%TextDocumentDefinition{params: params}, lsp) do
+    reply =
+      case DocumentStore.get(lsp, params.text_document.uri) do
+        %{text: text, kind: kind} ->
+          Features.definition(
+            params.text_document.uri,
+            text,
+            params.position,
+            Map.put(feature_options(lsp), :kind, kind)
+          )
+
+        nil ->
+          nil
+      end
+
+    {:reply, reply, lsp}
+  end
+
+  def handle_request(%TextDocumentDocumentLink{params: params}, lsp) do
+    reply =
+      case DocumentStore.get(lsp, params.text_document.uri) do
+        %{text: text, kind: kind} ->
+          Features.document_links(
+            params.text_document.uri,
+            text,
+            Map.put(feature_options(lsp), :kind, kind)
+          )
+
+        nil ->
+          []
       end
 
     {:reply, reply, lsp}
@@ -254,7 +295,8 @@ defmodule Postern.Server do
 
   def handle_notification(%TextDocumentDidOpen{params: params}, lsp) do
     doc = params.text_document
-    lsp = DocumentStore.put(lsp, doc.uri, doc.text, doc.version, doc.language_id)
+    kind = opened_kind(lsp, doc.uri, doc.language_id)
+    lsp = DocumentStore.put(lsp, doc.uri, doc.text, doc.version, doc.language_id, kind)
     publish_diagnostics(lsp, doc.uri, doc.text, doc.version)
     publish_related(lsp, doc.uri, document_kind(lsp, doc.uri))
     {:noreply, lsp}
@@ -305,25 +347,35 @@ defmodule Postern.Server do
     })
   end
 
-  # What pg_hba.conf reports depends on pg_ident.conf and the other way round,
-  # so when one changes, the other one open next to it is checked again. That
-  # covers a close as well, since the check then falls back to the disk.
+  # The name says what a file is; failing that, the root that includes it;
+  # failing that, what the editor calls it.
+  defp opened_kind(lsp, uri, language_id) do
+    with :unknown <- FileKind.detect(uri),
+         :unknown <-
+           ConfigTree.kind_of(FileKind.uri_to_path(uri), reader(lsp), workspace: workspace(lsp)) do
+      FileKind.detect(uri, language_id)
+    end
+  end
+
+  # What a file reports depends on the others in its tree, and pg_hba.conf
+  # and pg_ident.conf on each other, so when one changes every other open
+  # file of a related kind is checked again. That covers a close as well,
+  # since the check then falls back to the disk.
   defp publish_related(lsp, uri, kind) do
-    directory = uri |> FileKind.uri_to_path() |> Path.dirname()
     related = related_kinds(kind)
 
     for {other_uri, document} <- DocumentStore.all(lsp),
         other_uri != uri,
-        document.kind in related,
-        Path.dirname(FileKind.uri_to_path(other_uri)) == directory do
+        document.kind in related do
       publish_diagnostics(lsp, other_uri, document.text, document.version)
     end
 
     :ok
   end
 
-  defp related_kinds(:pg_hba_conf), do: [:pg_ident_conf]
-  defp related_kinds(:pg_ident_conf), do: [:pg_hba_conf]
+  defp related_kinds(:postgresql_conf), do: [:postgresql_conf]
+  defp related_kinds(:pg_hba_conf), do: [:pg_hba_conf, :pg_ident_conf]
+  defp related_kinds(:pg_ident_conf), do: [:pg_ident_conf, :pg_hba_conf]
   defp related_kinds(_kind), do: []
 
   # Clients differ in which diagnostics they send back with a code action
@@ -390,14 +442,25 @@ defmodule Postern.Server do
     base_options =
       if is_nil(initialization_options), do: %{}, else: Map.new(initialization_options)
 
-    Map.put(base_options, :live_snapshot, LiveOracle.snapshot(current_assigns(lsp).live_oracle))
+    base_options
+    |> Map.merge(document_options(lsp))
+    |> Map.put(:live_snapshot, LiveOracle.snapshot(current_assigns(lsp).live_oracle))
   end
 
   defp current_assigns(lsp), do: GenLSP.LSP.assigns(lsp)
 
   # The files a check reads besides the document: an open one as the editor
-  # has it, any other from the disk.
-  defp document_options(lsp), do: %{reader: Files.with_documents(DocumentStore.all(lsp))}
+  # has it, any other from the disk, and the workspace to look for a root in.
+  defp document_options(lsp), do: %{reader: reader(lsp), workspace: workspace(lsp)}
+
+  defp reader(lsp), do: Files.with_documents(DocumentStore.all(lsp))
+
+  defp workspace(lsp) do
+    case Map.get(current_assigns(lsp), :root_uri) do
+      nil -> nil
+      uri -> FileKind.uri_to_path(uri)
+    end
+  end
 
   defp client_name(%InitializeParams{client_info: %{name: name}}) when is_binary(name), do: name
   defp client_name(_params), do: "an unknown client"

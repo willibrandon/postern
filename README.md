@@ -14,7 +14,12 @@ shows the exact message a reload would produce, before the reload.
 - Unknown or misspelled settings, with the closest catalog name.
 - Values that do not fit the setting's type, unit, range or enum.
 - Settings removed or renamed between versions, and settings that need a restart.
-- Duplicate keys, where PostgreSQL keeps the last one.
+- A setting a later line overrides, in the same file or in one PostgreSQL reads after it, since
+  it keeps the last one. Postern follows `include`, `include_if_exists` and `include_dir` the way
+  the server does and reads `postgresql.auto.conf` last, so a value `ALTER SYSTEM` or a
+  `conf.d` file overrides is marked where it stands, and an include the server could not open
+  is an error. Hover says where the value that counts is set, go to definition goes there, and
+  an include line links to its file.
 - `pg_hba.conf` rules that an earlier rule shadows, options that do not apply to the method, and
   ident maps that are missing or unused.
 - Hover with the setting's description, default and range; completion of names, enum values,
@@ -77,7 +82,9 @@ original file as, and a `.conf` file under a `conf.d` directory below a `postgre
 which is how Debian lays out an `include_dir`. Zed matches names rather than patterns, so there
 the `conf.d` glob is a `file_types` setting. Neovim, Emacs and Zed also take a file whose first
 line is a `# postern:` comment. For another layout, tell the editor the file is `postgresql-conf`,
-`pg-hba` or `pg-ident` and the server takes its word for it.
+`pg-hba` or `pg-ident`. The server itself knows a file by the root that includes it, looking for
+`postgresql.conf`, `pg_hba.conf` or `pg_ident.conf` in the directories above it and up to three
+directories down the workspace, and takes the editor's word only for a file no root reaches.
 
 ## Command line
 
@@ -87,8 +94,9 @@ postern check --json pg_hba.conf
 postern --help
 ```
 
-`check` exits 1 when any file has an error. Files are recognised by name, so pass the real
-configuration files rather than copies with other names.
+`check` exits 1 when any file has an error. Files are recognised by name, or by the
+`postgresql.conf`, `pg_hba.conf` or `pg_ident.conf` above them that includes them, and checking a
+root checks every file it reads.
 
 ## Configuration
 

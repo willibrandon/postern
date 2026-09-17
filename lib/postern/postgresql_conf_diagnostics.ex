@@ -5,12 +5,19 @@ defmodule Postern.PostgresqlConfDiagnostics do
   All setting metadata comes from `Postern.Catalog`; this module contains only
   validation mechanics. The target major version is selected from
   initialization options, a `# postern: pg=N` comment, or the newest catalog.
+
+  With a `:tree` from `Postern.ConfigTree` and the document's `:path` in the
+  options, a setting a later file overrides gets its hint and an include the
+  server could not follow gets its error, the way `pg_file_settings` reports
+  them. Without one, only the document's own lines are weighed against each
+  other.
   """
 
   alias GenLSP.Structures.Diagnostic
   alias GenLSP.Structures.Position
   alias GenLSP.Structures.Range
   alias Postern.Catalog
+  alias Postern.ConfigTree
   alias Postern.Parser.PostgresqlConf
 
   @error 1
@@ -37,20 +44,18 @@ defmodule Postern.PostgresqlConfDiagnostics do
   Produces parser and catalog diagnostics for a `postgresql.conf` document.
   """
   @spec diagnostics(String.t(), map() | keyword()) :: [Diagnostic.t()]
-  def diagnostics(text, initialization_options \\ %{}) when is_binary(text) do
+  def diagnostics(text, options \\ %{}) when is_binary(text) do
     versions = Catalog.versions()
-    version = target_version(text, initialization_options, versions)
+    version = target_version(text, options, versions)
     catalog = Catalog.load(version)
     {:ok, entries} = PostgresqlConf.parse(text)
+    tree = option(options, :tree)
+    path = option(options, :path)
 
-    parser_diagnostics = parse_diagnostics(entries)
-
-    assignment_diagnostics =
-      entries
-      |> Enum.filter(&(&1.type == :assignment))
-      |> validate_assignments(catalog, versions)
-
-    parser_diagnostics ++ assignment_diagnostics
+    parse_diagnostics(entries) ++
+      value_diagnostics(entries, catalog, versions) ++
+      override_diagnostics(tree, entries, path) ++
+      include_diagnostics(tree, path)
   end
 
   @doc "Returns the selected PostgreSQL major version for a document."
@@ -73,34 +78,47 @@ defmodule Postern.PostgresqlConfDiagnostics do
     |> Enum.map(&diagnostic(&1.span, @error, &1.message))
   end
 
-  defp validate_assignments(entries, catalog, versions) do
-    {diagnostics, _seen} =
-      Enum.reduce(entries, {[], %{}}, fn entry, {diagnostics, seen} ->
-        name = entry.name
-        setting = Catalog.fetch(catalog, name)
-        duplicate = Map.has_key?(seen, name)
-        seen = Map.put(seen, name, entry)
-
-        entry_diagnostics =
-          duplicate_diagnostic(entry, duplicate) ++
-            setting_diagnostics(entry, setting, name, versions, catalog)
-
-        {diagnostics ++ entry_diagnostics, seen}
-      end)
-
-    diagnostics
+  defp value_diagnostics(entries, catalog, versions) do
+    for %{type: :assignment, name: name} = entry <- entries,
+        diagnostic <-
+          setting_diagnostics(entry, Catalog.fetch(catalog, name), name, versions, catalog),
+        do: diagnostic
   end
 
-  defp duplicate_diagnostic(_entry, false), do: []
+  # The last assignment of a name is the one PostgreSQL keeps, whether it is
+  # further down this file or in a file the tree reads later. The line that
+  # loses gets the hint and says where, as pg_file_settings marks that line
+  # applied = false.
+  defp override_diagnostics(nil, entries, _path) do
+    %{entries: Enum.map(entries, &%{path: nil, entry: &1})}
+    |> ConfigTree.overridden()
+    |> Enum.map(fn {loser, winner} -> override_hint(loser, winner) end)
+  end
 
-  defp duplicate_diagnostic(entry, true) do
-    [
-      diagnostic(
-        entry.name_span,
-        @hint,
-        "duplicate setting; this later value overrides an earlier value"
-      )
-    ]
+  defp override_diagnostics(tree, _entries, path) do
+    for {%{path: ^path} = loser, winner} <- ConfigTree.overridden(tree),
+        do: override_hint(loser, winner)
+  end
+
+  defp override_hint(loser, winner) do
+    line = winner.entry.span.line
+
+    where =
+      if winner.path == loser.path,
+        do: "on line #{line}",
+        else: "in #{ConfigTree.relative(winner.path, loser.path)} on line #{line}"
+
+    %{
+      diagnostic(loser.entry.name_span, @hint, "overridden by a later entry #{where}")
+      | code: "override"
+    }
+  end
+
+  defp include_diagnostics(nil, _path), do: []
+
+  defp include_diagnostics(tree, path) do
+    for %{path: ^path} = problem <- tree.problems,
+        do: diagnostic(problem.span, problem.severity, problem.message)
   end
 
   defp setting_diagnostics(entry, nil, name, versions, catalog) do
@@ -306,6 +324,10 @@ defmodule Postern.PostgresqlConfDiagnostics do
     |> String.trim_trailing("}")
     |> String.split(",", trim: true)
   end
+
+  defp option(options, key) when is_map(options), do: options[key] || options[Atom.to_string(key)]
+  defp option(options, key) when is_list(options), do: Keyword.get(options, key)
+  defp option(_options, _key), do: nil
 
   defp option_version(options) when is_list(options), do: options[:pg] || options[:version]
 

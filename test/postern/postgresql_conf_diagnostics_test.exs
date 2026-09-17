@@ -20,8 +20,17 @@ defmodule Postern.PostgresqlConfDiagnosticsTest do
     assert Enum.any?(messages, &String.contains?(&1, "not one of"))
     assert Enum.any?(messages, &String.contains?(&1, "below the minimum"))
     assert Enum.any?(messages, &String.contains?(&1, "unit \"ms\" is not allowed"))
-    assert Enum.any?(messages, &String.contains?(&1, "duplicate setting"))
     refute Enum.any?(messages, &String.contains?(&1, "requires restart"))
+
+    overrides =
+      diagnostics
+      |> Enum.filter(&(&1.code == "override"))
+      |> Enum.map(&{&1.range.start.line, &1.severity, &1.message})
+
+    assert overrides == [
+             {4, 4, "overridden by a later entry on line 9"},
+             {5, 4, "overridden by a later entry on line 7"}
+           ]
   end
 
   test "selects the target version from a postern comment" do

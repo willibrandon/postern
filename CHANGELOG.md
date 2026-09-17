@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+- Postern follows `include`, `include_if_exists` and `include_dir` the way the server does,
+  relative to the file that names them, in C locale order for a directory, and reads
+  `postgresql.auto.conf` from the data directory last, so a setting a later file overrides gets
+  a hint on the line that loses naming the file and line that win, and an include the server
+  could not open gets the error `pg_file_settings` would show. The hint for a setting repeated in
+  one file moved to the line that loses too. Hover says where the value that counts is set, go to
+  definition goes there, and an include line links to its file. `pg_hba.conf` and `pg_ident.conf`
+  trees work the same way, so a rule an included file shadows and a map an included file defines
+  are seen. A file with another name is known by the root that includes it, `postern check`
+  walks the tree of a root it is given, and a live check reports a line `pg_file_settings` left
+  unapplied for a later entry. The resolver is compared with `pg_file_settings` on every
+  supported version in CI.
 - A file with another name is checked as what the editor calls it: `postgresql-conf`, `pg-hba` or
   `pg-ident`. The editor packages claim `postgresql.base.conf`, which Patroni keeps the original
   file as, and a `.conf` file under a `conf.d` directory below a `postgresql` directory, which is

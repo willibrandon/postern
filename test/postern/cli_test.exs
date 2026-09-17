@@ -65,6 +65,37 @@ defmodule Postern.CLITest do
     assert output =~ ~s(warning: ident map "known" is never referenced)
   end
 
+  test "check follows the includes of a root and knows a file by the root that includes it" do
+    directory = Path.join(System.tmp_dir!(), "postern-cli-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(Path.join(directory, "conf.d"))
+    on_exit(fn -> File.rm_rf!(directory) end)
+    root = Path.join(directory, "postgresql.conf")
+    included = Path.join(directory, "conf.d/10-memory.conf")
+    stray = Path.join(directory, "stray.conf")
+    File.write!(root, "work_mem = 4MB\ninclude_dir 'conf.d'\ninclude 'gone.conf'\n")
+    File.write!(included, "work_mem = 8MB\nshared_buffrs = 1\n")
+    File.write!(stray, "port = 5432\n")
+
+    output = capture_io(fn -> assert CLI.run(["check", root]) == 1 end)
+
+    assert output =~
+             ~s(postgresql.conf:1:1: hint: overridden by a later entry in conf.d/10-memory.conf on line 1)
+
+    assert output =~ ~s(postgresql.conf:3:9: error: could not open file "#{directory}/gone.conf")
+    assert output =~ ~s(10-memory.conf:2:1: error: unknown setting "shared_buffrs")
+
+    # The included file on its own is checked through its root, and once
+    # when it is given with the root.
+    output = capture_io(fn -> assert CLI.run(["check", included]) == 1 end)
+    assert output =~ ~s(10-memory.conf:2:1: error: unknown setting "shared_buffrs")
+
+    output = capture_io(fn -> assert CLI.run(["check", root, included]) == 1 end)
+    assert length(String.split(output, "shared_buffrs")) == 2
+
+    errors = capture_io(:stderr, fn -> assert CLI.run(["check", stray]) == 1 end)
+    assert errors =~ "no postgresql.conf, pg_hba.conf or pg_ident.conf includes it"
+  end
+
   defp invalid_config_path do
     directory = Path.join(System.tmp_dir!(), "postern-cli-#{System.unique_integer([:positive])}")
     File.mkdir_p!(directory)

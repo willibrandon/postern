@@ -5,13 +5,18 @@ defmodule Postern.Diagnostics do
   Parse errors are handled for all three file formats. PostgreSQL configuration
   assignments additionally use generated catalogs for offline validation.
 
-  A `pg_hba.conf` check needs the `pg_ident.conf` next to it and the other way
-  round. The caller can pass their text as `:pg_ident_text` and `:pg_hba_text`,
-  or a `:reader` from `Postern.Files` that fetches the file beside the document.
+  With a `:reader` from `Postern.Files`, a check sees what the server sees: the
+  whole tree of files the document belongs to, resolved by
+  `Postern.ConfigTree`, and for `pg_hba.conf` the `pg_ident.conf` tree next to
+  the root, and the other way round. The caller can instead pass that other
+  file's text as `:pg_ident_text` or `:pg_hba_text`. Without either, only the
+  document itself is weighed.
   """
 
   alias GenLSP.Structures.Diagnostic
+  alias Postern.ConfigTree
   alias Postern.FileKind
+  alias Postern.Files
   alias Postern.LiveDiagnostics
   alias Postern.PgHbaDiagnostics
   alias Postern.PgIdentDiagnostics
@@ -26,31 +31,40 @@ defmodule Postern.Diagnostics do
   @spec for_document(String.t(), String.t(), map() | keyword()) :: [Diagnostic.t()]
   def for_document(uri, text, options \\ %{}) when is_binary(uri) and is_binary(text) do
     case option(options, :kind) || FileKind.detect(uri) do
-      :unknown -> []
-      kind -> offline(kind, uri, text, options) ++ live(kind, uri, options)
+      :unknown ->
+        []
+
+      kind ->
+        path = FileKind.uri_to_path(uri)
+        {tree, other} = trees(kind, path, options)
+
+        one_override_per_line(
+          offline(kind, path, text, options, tree, other) ++ live(kind, uri, options)
+        )
     end
   end
 
-  defp offline(:postgresql_conf, _uri, text, options),
-    do: PostgresqlConfDiagnostics.diagnostics(text, options)
-
-  defp offline(:pg_hba_conf, uri, text, options) do
-    PgHbaDiagnostics.diagnostics(
-      text,
-      option(options, :pg_ident_text) || sibling_text(uri, "pg_ident.conf", options),
-      %{
-        report_trust: option(options, :reportTrust) != false,
-        version: target_version(text, options)
-      }
-    )
+  defp offline(:postgresql_conf, path, text, options, tree, _other) do
+    PostgresqlConfDiagnostics.diagnostics(text, with_tree(options, tree, path))
   end
 
-  defp offline(:pg_ident_conf, uri, text, options) do
-    PgIdentDiagnostics.diagnostics(
-      text,
-      option(options, :pg_hba_text) || sibling_text(uri, "pg_hba.conf", options),
-      %{version: target_version(text, options)}
-    )
+  defp offline(:pg_hba_conf, path, text, options, tree, ident_tree) do
+    PgHbaDiagnostics.diagnostics(text, option(options, :pg_ident_text), %{
+      report_trust: option(options, :reportTrust) != false,
+      version: target_version(text, options),
+      tree: tree,
+      path: path,
+      ident_tree: ident_tree
+    })
+  end
+
+  defp offline(:pg_ident_conf, path, text, options, tree, hba_tree) do
+    PgIdentDiagnostics.diagnostics(text, option(options, :pg_hba_text), %{
+      version: target_version(text, options),
+      tree: tree,
+      path: path,
+      hba_tree: hba_tree
+    })
   end
 
   defp live(kind, uri, options) do
@@ -62,17 +76,49 @@ defmodule Postern.Diagnostics do
     )
   end
 
-  # The file next to the document, through the reader. Without one there is
-  # nothing to look at, and the checks that need the file stay quiet.
-  defp sibling_text(uri, name, options) do
-    with reader when is_function(reader, 1) <- option(options, :reader),
-         path = uri |> FileKind.uri_to_path() |> Path.dirname() |> Path.join(name),
-         {:ok, text} <- reader.(path) do
-      text
-    else
-      _ -> nil
+  # The document's tree, and for the two authentication files the other one's
+  # tree beside the root. Without a reader there is nothing to look at.
+  defp trees(kind, path, options) do
+    case option(options, :reader) do
+      %Files{} = files ->
+        tree = ConfigTree.for_document(kind, path, files, workspace: option(options, :workspace))
+        {tree, other_tree(kind, tree.root, files)}
+
+      _none ->
+        {nil, nil}
     end
   end
+
+  defp other_tree(:pg_hba_conf, root, files), do: beside(:pg_ident_conf, root, files)
+  defp other_tree(:pg_ident_conf, root, files), do: beside(:pg_hba_conf, root, files)
+  defp other_tree(_kind, _root, _files), do: nil
+
+  defp beside(kind, root, files) do
+    path = Path.join(Path.dirname(root), ConfigTree.root_name(kind))
+
+    case files.read.(path) do
+      {:ok, _text} -> ConfigTree.resolve(kind, path, files)
+      :error -> nil
+    end
+  end
+
+  defp with_tree(options, tree, path),
+    do: options |> Map.new() |> Map.put(:tree, tree) |> Map.put(:path, path)
+
+  # The server reports an override the tree already found. The first hint on
+  # a line, which is the offline one, is the one kept.
+  defp one_override_per_line(diagnostics) do
+    diagnostics
+    |> Enum.reduce([], fn diagnostic, kept ->
+      if diagnostic.code == "override" and
+           Enum.any?(kept, &(&1.code == "override" and same_line?(&1, diagnostic))),
+         do: kept,
+         else: [diagnostic | kept]
+    end)
+    |> Enum.reverse()
+  end
+
+  defp same_line?(a, b), do: a.range.start.line == b.range.start.line
 
   # The version comes from the `pg` option or a `# postern: pg=N` comment in
   # any of the files, the same way it does for postgresql.conf.
