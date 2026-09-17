@@ -47,6 +47,13 @@ defmodule Postern.PgHbaOptions do
   @spec regex?(pos_integer()) :: boolean()
   def regex?(version), do: version >= 16
 
+  @doc """
+  Whether a version joins a line that ends with a backslash to the next one
+  in pg_hba.conf and pg_ident.conf, which 14 added.
+  """
+  @spec continuations?(pos_integer()) :: boolean()
+  def continuations?(version), do: version >= 14
+
   @doc "The methods that take a `map=` option, and so a map name from pg_ident.conf."
   @spec map_methods(pos_integer()) :: [String.t()]
   def map_methods(version) when version >= 18, do: ~w(ident peer gss sspi cert oauth)

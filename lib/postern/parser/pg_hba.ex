@@ -11,52 +11,21 @@ defmodule Postern.Parser.PgHba do
   `include_dir` here too, and regexes prefixed with `/` in database
   and user fields. A token is quoted with double quotes, the only
   quote character the server's tokenizer knows; a single quote is an
-  ordinary character. Comma-separated lists apply.
+  ordinary character. Comma-separated lists apply. A line that ends
+  with a backslash goes on with the next one, as
+  `Postern.Parser.AuthLines` has it, unless the caller says the target
+  version has no continuations.
 
   Every token carries a span.
   """
 
-  import NimbleParsec
-
-  # Quoted strings for pg_hba — double quotes with "" => "
-  dq_quoted_content =
-    repeat(
-      choice([
-        string("\"\"") |> replace("\""),
-        utf8_string([not: ?"], min: 1)
-      ])
-    )
-    |> reduce({Enum, :join, [""]})
-
-  dq_quoted =
-    ignore(string("\""))
-    |> concat(dq_quoted_content)
-    |> ignore(string("\""))
-    |> unwrap_and_tag(:quoted)
-
-  quoted_token = dq_quoted
-
-  # Unquoted token: up to whitespace, #, comma? Actually comma is separator inside list,
-  # but we keep it as part of token; later split. So unquoted token is run of non-space, non-# , non-quote
-  unquoted_token =
-    ascii_string([not: ?\s, not: ?\t, not: ?#, not: ?"], min: 1)
-    |> unwrap_and_tag(:unquoted)
-
-  token = choice([quoted_token, unquoted_token])
-
-  defparsec(:parse_token, token)
-  defparsec(:parse_quoted_token, quoted_token)
+  alias Postern.Parser.AuthLines
 
   @connection_types ~w(local host hostssl hostnossl hostgssenc hostnogssenc)
   @include_directives ~w(include include_if_exists include_dir)
   @address_keywords ~w(all samehost samenet)
 
-  @type span :: %{
-          line: pos_integer(),
-          col: pos_integer(),
-          end_line: pos_integer(),
-          end_col: pos_integer()
-        }
+  @type span :: AuthLines.span()
   @type entry ::
           %{
             type: :rule,
@@ -88,46 +57,48 @@ defmodule Postern.Parser.PgHba do
 
   @doc """
   Parses a `pg_hba.conf` file content.
+
+  `continuations: false` reads every line on its own, as a server older
+  than 14 does.
   """
-  @spec parse(String.t()) :: {:ok, [entry()]}
-  def parse(content) when is_binary(content) do
-    lines = String.split(content, "\n", trim: false)
-
-    entries =
-      lines
-      |> Enum.with_index(1)
-      |> Enum.map(fn {raw_line, line_no} ->
-        line = String.trim_trailing(raw_line, "\r")
-        parse_line(line, line_no)
-      end)
-
-    {:ok, entries}
+  @spec parse(String.t(), keyword()) :: {:ok, [entry()]}
+  def parse(content, opts \\ []) when is_binary(content) do
+    records = AuthLines.records(content, Keyword.get(opts, :continuations, true))
+    {:ok, Enum.map(records, &parse_record/1)}
   end
 
-  @doc """
-  Parses a single line.
-  """
+  @doc "Parses one physical line."
   @spec parse_line(String.t(), pos_integer()) :: entry()
-  def parse_line(line, line_no) do
-    trimmed = String.trim(line)
+  def parse_line(line, line_no), do: parse_record(AuthLines.single(line, line_no))
+
+  @doc "Whether the server would take the text for an IP address rather than a host name."
+  @spec numeric_ip?(String.t()) :: boolean()
+  def numeric_ip?(value),
+    do: match?({:ok, _address}, :inet.parse_strict_address(String.to_charlist(value)))
+
+  defp parse_record(%{text: text} = record) do
+    trimmed = String.trim(text)
 
     cond do
       trimmed == "" ->
-        %{type: :blank, span: span_for(line_no, 1, line), raw: line}
+        %{type: :blank, span: AuthLines.span(record), raw: text}
 
       String.starts_with?(trimmed, "#") ->
-        col = column_of(line, "#")
-        %{type: :comment, text: line, span: span_for(line_no, col, line), raw: line}
+        %{
+          type: :comment,
+          text: text,
+          span: AuthLines.span(record, offset_of(text, "#")),
+          raw: text
+        }
 
       true ->
-        {code_part, _comment} = split_comment(line)
+        {code_part, _comment} = split_comment(text)
         code_trimmed = String.trim(code_part)
 
         if code_trimmed == "" do
-          %{type: :comment, text: line, span: span_for(line_no, 1, line), raw: line}
+          %{type: :comment, text: text, span: AuthLines.span(record), raw: text}
         else
-          tokens = tokenize(code_trimmed)
-          parse_tokens(tokens, line, line_no)
+          parse_tokens(tokenize(code_trimmed), record)
         end
     end
   end
@@ -175,42 +146,29 @@ defmodule Postern.Parser.PgHba do
     do_tokenize(rest, acc, current <> <<c::utf8>>, false, nil)
   end
 
-  defp parse_tokens([], raw_line, line_no),
-    do: %{type: :blank, span: span_for(line_no, 1, raw_line), raw: raw_line}
+  defp parse_tokens([], %{text: text} = record),
+    do: %{type: :blank, span: AuthLines.span(record), raw: text}
 
-  defp parse_tokens([first | _rest] = tokens, raw_line, line_no) do
+  defp parse_tokens([first | _rest] = tokens, record) do
     if first in @include_directives,
-      do: parse_include(tokens, raw_line, line_no),
-      else: parse_rule(tokens, raw_line, line_no)
+      do: parse_include(tokens, record),
+      else: parse_rule(tokens, record)
   end
 
-  defp parse_include(tokens, raw_line, line_no) do
+  defp parse_include(tokens, %{text: text} = record) do
     case tokens do
-      [directive, file | _rest] when directive in @include_directives ->
+      [directive, file | _rest] ->
         %{
           type: :include,
           directive: directive,
           file: unquote_token(file),
-          tokens: token_spans(tokens, raw_line, line_no),
-          span: span_for(line_no, 1, raw_line),
-          raw: raw_line
+          tokens: token_spans(tokens, record),
+          span: AuthLines.span(record),
+          raw: text
         }
 
-      [directive] when directive in @include_directives ->
-        %{
-          type: :error,
-          message: "missing file for #{directive}",
-          span: span_for(line_no, 1, raw_line),
-          raw: raw_line
-        }
-
-      _ ->
-        %{
-          type: :error,
-          message: "invalid include directive",
-          span: span_for(line_no, 1, raw_line),
-          raw: raw_line
-        }
+      [directive] ->
+        parse_error("missing file for #{directive}", record)
     end
   end
 
@@ -221,15 +179,15 @@ defmodule Postern.Parser.PgHba do
   # field that ends too soon or holds a list where one value belongs is an
   # error in the server's words. Whether the method exists is for the checks,
   # which know the target version.
-  defp parse_rule([conn_type | rest] = tokens, raw_line, line_no) do
-    with :ok <- single(conn_type, "connection type", raw_line, line_no),
-         :ok <- connection_type(conn_type, raw_line, line_no),
-         {:ok, database, rest} <- field(rest, "database specification", raw_line, line_no),
-         {:ok, user, rest} <- field(rest, "role specification", raw_line, line_no),
-         {:ok, address, netmask, rest} <- address(conn_type, rest, raw_line, line_no),
-         {:ok, method, options} <- field(rest, "authentication method", raw_line, line_no),
-         :ok <- single(method, "authentication type", raw_line, line_no) do
-      spans = token_spans(tokens, raw_line, line_no)
+  defp parse_rule([conn_type | rest] = tokens, %{text: text} = record) do
+    with :ok <- single(conn_type, "connection type", record),
+         :ok <- connection_type(conn_type, record),
+         {:ok, database, rest} <- field(rest, "database specification", record),
+         {:ok, user, rest} <- field(rest, "role specification", record),
+         {:ok, address, netmask, rest} <- address(conn_type, rest, record),
+         {:ok, method, options} <- field(rest, "authentication method", record),
+         :ok <- single(method, "authentication type", record) do
+      spans = token_spans(tokens, record)
       method_index = length(tokens) - length(options) - 1
 
       %{
@@ -241,56 +199,54 @@ defmodule Postern.Parser.PgHba do
         address_kind: address_kind(address),
         netmask: maybe_unquote(netmask),
         auth_method: unquote_token(method),
-        options: parse_options(options, raw_line, line_no),
+        options: parse_options(options),
         tokens: spans,
         address_span: address && Enum.at(spans, 3).span,
         method_span: Enum.at(spans, method_index).span,
-        span: span_for(line_no, 1, raw_line),
-        raw: raw_line
+        span: AuthLines.span(record),
+        raw: text
       }
     end
   end
 
   # The server names the field it ran out of input before.
-  defp field([], what, raw_line, line_no),
-    do: parse_error("end-of-line before #{what}", raw_line, line_no)
-
-  defp field([token | rest], _what, _raw_line, _line_no), do: {:ok, token, rest}
+  defp field([], what, record), do: parse_error("end-of-line before #{what}", record)
+  defp field([token | rest], _what, _record), do: {:ok, token, rest}
 
   # A field that takes one value refuses a list.
-  defp single(token, what, raw_line, line_no) do
+  defp single(token, what, record) do
     if length(split_outside_quotes(token, "", [], false)) > 1,
-      do: parse_error("multiple values specified for #{what}", raw_line, line_no),
+      do: parse_error("multiple values specified for #{what}", record),
       else: :ok
   end
 
   # The keywords count only unquoted, as token_is_keyword has it.
-  defp connection_type(token, raw_line, line_no) do
+  defp connection_type(token, record) do
     if token in @connection_types,
       do: :ok,
-      else: parse_error(~s(invalid connection type "#{unquote_token(token)}"), raw_line, line_no)
+      else: parse_error(~s(invalid connection type "#{unquote_token(token)}"), record)
   end
 
   # The address field: nothing on a local rule; a keyword, a host name or a
   # CIDR address on its own; an IP address followed by its netmask. The
   # server checks the address and the mask as it reads them, before it looks
   # for the method, so those are errors here rather than in the checks.
-  defp address("local", rest, _raw_line, _line_no), do: {:ok, nil, nil, rest}
+  defp address("local", rest, _record), do: {:ok, nil, nil, rest}
 
-  defp address(_type, [], raw_line, line_no),
-    do: parse_error("end-of-line before IP address specification", raw_line, line_no)
+  defp address(_type, [], record),
+    do: parse_error("end-of-line before IP address specification", record)
 
-  defp address(_type, [address | rest], raw_line, line_no) do
-    with :ok <- single(address, "host address", raw_line, line_no),
-         :ok <- cidr(address, raw_line, line_no) do
+  defp address(_type, [address | rest], record) do
+    with :ok <- single(address, "host address", record),
+         :ok <- cidr(address, record) do
       if address_kind(address) == :ip,
-        do: netmask(address, rest, raw_line, line_no),
+        do: netmask(address, rest, record),
         else: {:ok, address, nil, rest}
     end
   end
 
   # A CIDR address has an IP address before the slash and a mask that fits it.
-  defp cidr(token, raw_line, line_no) do
+  defp cidr(token, record) do
     value = unquote_token(token)
 
     with :cidr <- address_kind(token),
@@ -300,14 +256,10 @@ defmodule Postern.Parser.PgHba do
       :ok
     else
       {:error, _reason} ->
-        parse_error(
-          ~s(specifying both host name and CIDR mask is invalid: "#{value}"),
-          raw_line,
-          line_no
-        )
+        parse_error(~s(specifying both host name and CIDR mask is invalid: "#{value}"), record)
 
       false ->
-        parse_error(~s(invalid CIDR mask in address "#{value}"), raw_line, line_no)
+        parse_error(~s(invalid CIDR mask in address "#{value}"), record)
 
       _other_kind ->
         :ok
@@ -323,20 +275,20 @@ defmodule Postern.Parser.PgHba do
 
   # A bare IP address takes the next field as its netmask, an address of the
   # same family; whether the mask is contiguous is not the server's concern.
-  defp netmask(_address, [], raw_line, line_no),
-    do: parse_error("end-of-line before netmask specification", raw_line, line_no)
+  defp netmask(_address, [], record),
+    do: parse_error("end-of-line before netmask specification", record)
 
-  defp netmask(address, [netmask | rest], raw_line, line_no) do
+  defp netmask(address, [netmask | rest], record) do
     {:ok, ip} = :inet.parse_strict_address(String.to_charlist(unquote_token(address)))
     mask = unquote_token(netmask)
 
-    with :ok <- single(netmask, "netmask", raw_line, line_no),
+    with :ok <- single(netmask, "netmask", record),
          {:ok, parsed} <- :inet.parse_strict_address(String.to_charlist(mask)),
          true <- tuple_size(parsed) == tuple_size(ip) do
       {:ok, address, netmask, rest}
     else
-      {:error, _reason} -> parse_error(~s(invalid IP mask "#{mask}"), raw_line, line_no)
-      false -> parse_error("IP address and mask do not match", raw_line, line_no)
+      {:error, _reason} -> parse_error(~s(invalid IP mask "#{mask}"), record)
+      false -> parse_error("IP address and mask do not match", record)
       error -> error
     end
   end
@@ -357,17 +309,11 @@ defmodule Postern.Parser.PgHba do
     end
   end
 
-  @doc "Whether the server would take the text for an IP address rather than a host name."
-  @spec numeric_ip?(String.t()) :: boolean()
-  def numeric_ip?(value),
-    do: match?({:ok, _address}, :inet.parse_strict_address(String.to_charlist(value)))
-
   defp maybe_unquote(nil), do: nil
   defp maybe_unquote(value), do: unquote_token(value)
 
-  defp parse_error(message, raw_line, line_no) do
-    %{type: :error, message: message, span: span_for(line_no, 1, raw_line), raw: raw_line}
-  end
+  defp parse_error(message, %{text: text} = record),
+    do: %{type: :error, message: message, span: AuthLines.span(record), raw: text}
 
   # A comma separates the names in a field, unless it is inside double
   # quotes, where it is part of the name, as in the server's tokenizer.
@@ -394,7 +340,7 @@ defmodule Postern.Parser.PgHba do
   # starts another option, which then has to be name=value on its own; a
   # list meant as one value, such as radiusservers, is quoted. An option
   # without a value is kept as `true` for the checks to refuse.
-  defp parse_options(opts, _raw_line, _line_no) do
+  defp parse_options(opts) do
     opts
     |> Enum.flat_map(&split_outside_quotes(&1, "", [], false))
     |> Enum.reduce(%{}, fn opt, acc ->
@@ -444,43 +390,34 @@ defmodule Postern.Parser.PgHba do
     do_split(rest, acc <> <<c::utf8>>, in_quote, quote_char)
   end
 
-  defp span_for(line, col, raw) do
-    end_col = col + String.length(raw)
-    %{line: line, col: col, end_line: line, end_col: end_col}
-  end
-
-  defp column_of(line, substr) do
-    case :binary.match(line, substr) do
-      {pos, _} -> pos + 1
-      :nomatch -> 1
+  defp offset_of(text, substr) do
+    case :binary.match(text, substr) do
+      {pos, _length} -> pos
+      :nomatch -> 0
     end
   end
 
-  defp token_spans(tokens, raw_line, line_no) do
+  # Each token found in the record from where the last one ended, with the
+  # physical line and column it starts and ends on.
+  defp token_spans(tokens, %{text: text} = record) do
     {spans, _offset} =
       Enum.map_reduce(tokens, 0, fn token, offset ->
-        token_size = byte_size(token)
-        remaining_size = byte_size(raw_line) - offset
-        remaining = binary_part(raw_line, offset, max(remaining_size, 0))
+        remaining = binary_part(text, offset, byte_size(text) - offset)
 
-        position =
+        start =
           case :binary.match(remaining, token) do
-            {relative, _length} -> offset + relative + 1
-            :nomatch -> offset + 1
+            {relative, _length} -> offset + relative
+            :nomatch -> offset
           end
 
-        span = %{
-          value: unquote_token(token),
-          raw: token,
-          span: %{
-            line: line_no,
-            col: position,
-            end_line: line_no,
-            end_col: position + String.length(token)
-          }
-        }
+        finish = start + byte_size(token)
 
-        {span, position - 1 + token_size}
+        {%{
+           value: unquote_token(token),
+           raw: token,
+           offset: start,
+           span: AuthLines.span(record, start, finish)
+         }, finish}
       end)
 
     spans

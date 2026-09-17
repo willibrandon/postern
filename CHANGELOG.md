@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+- A line of `pg_hba.conf` or `pg_ident.conf` that ends with a backslash goes on with the next
+  one, the way the server has read it since 14, joined as it is, so the continuation works inside
+  a quoted token or a comment and an empty line ends the record. The record carries the number
+  of the line it starts on, as `pg_hba_file_rules` reports it, and a problem on a later line is
+  marked there. A target older than 14 reads every line on its own.
 - A `pg_hba.conf` rule is checked as a whole the way hba.c checks it once its options are read:
   gssapi on a local socket, peer anywhere else and cert without hostssl are errors, ldap must
   choose between a simple bind and search+bind and take one of ldapsearchattribute and

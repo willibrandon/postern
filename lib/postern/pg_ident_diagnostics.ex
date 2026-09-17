@@ -24,8 +24,9 @@ defmodule Postern.PgIdentDiagnostics do
   """
   @spec diagnostics(String.t(), String.t() | nil, map()) :: [Diagnostic.t()]
   def diagnostics(text, hba_text \\ nil, options \\ %{}) when is_binary(text) do
-    {:ok, entries} = PgIdent.parse(text)
     version = Map.get(options, :version) || target_version(text, options)
+    continuations = [continuations: PgHbaOptions.continuations?(version)]
+    {:ok, entries} = PgIdent.parse(text, continuations)
     tree = Map.get(options, :tree)
     path = Map.get(options, :path)
 
@@ -35,7 +36,7 @@ defmodule Postern.PgIdentDiagnostics do
         _ -> []
       end)
 
-    referenced = referenced_maps(hba_text, Map.get(options, :hba_tree), version)
+    referenced = referenced_maps(hba_text, Map.get(options, :hba_tree), version, continuations)
 
     parser_diagnostics ++
       version_diagnostics(entries, version) ++
@@ -95,7 +96,7 @@ defmodule Postern.PgIdentDiagnostics do
 
   # The maps the rules name: across the pg_hba.conf tree, or in the text the
   # caller supplied, or nothing to check against.
-  defp referenced_maps(_text, %{entries: entries}, version) do
+  defp referenced_maps(_text, %{entries: entries}, version, _continuations) do
     map_methods = PgHbaOptions.map_methods(version)
 
     MapSet.new(
@@ -106,10 +107,10 @@ defmodule Postern.PgIdentDiagnostics do
     )
   end
 
-  defp referenced_maps(nil, nil, _version), do: nil
+  defp referenced_maps(nil, nil, _version, _continuations), do: nil
 
-  defp referenced_maps(text, nil, version) do
-    {:ok, entries} = PgHba.parse(text)
+  defp referenced_maps(text, nil, version, continuations) do
+    {:ok, entries} = PgHba.parse(text, continuations)
     map_methods = PgHbaOptions.map_methods(version)
 
     entries

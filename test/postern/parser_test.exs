@@ -167,6 +167,48 @@ defmodule Postern.ParserTest do
       assert %{address_kind: :cidr, auth_method: "scram-sha-256-plus", method_span: %{col: 25}} =
                shape.("host all all 10.0.0.0/8 scram-sha-256-plus")
 
+      # A line that ends with a backslash goes on with the next one, joined as
+      # it is, and the record takes the number of the line it starts on while
+      # each token keeps its own line and column.
+      assert {:ok, entries} =
+               PgHba.parse(
+                 "host all all 10.0.0.0/8 \\\n  md5 \\\n  clientcert=verify-ca\nhost \"my \\\ndb\" all 10.0.0.0/8 md5\n# a comment that goes on \\\nhost all all all trust\nhost all all 10.0.0.0/8 \\\n\nmd5\nhost all all 10.0.0.0/8 md5\\\\\n"
+               )
+
+      assert [
+               %{
+                 type: :rule,
+                 span: %{line: 1, end_line: 3},
+                 options: %{"clientcert" => "verify-ca"}
+               } =
+                 continued,
+               %{type: :rule, databases: ["my db"], span: %{line: 4, end_line: 5}},
+               %{type: :comment, span: %{line: 6, end_line: 7}},
+               %{
+                 type: :error,
+                 message: "end-of-line before authentication method",
+                 span: %{line: 8}
+               },
+               %{type: :error, message: ~s(invalid connection type "md5"), span: %{line: 10}},
+               # Two backslashes: one is stripped, and the empty line after it
+               # is read in and ends the record, as the server has it.
+               %{type: :rule, auth_method: "md5\\", span: %{line: 11, end_line: 12}}
+             ] = entries
+
+      assert continued.method_span == %{line: 2, col: 3, end_line: 2, end_col: 6}
+
+      assert [_type, _db, _user, _address, _method, %{span: %{line: 3, col: 3}}] =
+               continued.tokens
+
+      # An older target reads every line on its own.
+      assert {:ok,
+              [
+                %{auth_method: "\\"},
+                %{type: :error, message: ~s(invalid connection type "md5")},
+                _blank
+              ]} =
+               PgHba.parse("host all all 10.0.0.0/8 \\\n  md5\n", continuations: false)
+
       # An option field is a list too, so a list meant as one value is quoted.
       assert %{options: %{"radiusservers" => "a", "b" => true}} =
                shape.("host all all 10.0.0.0/8 radius radiusservers=a,b")
@@ -177,6 +219,13 @@ defmodule Postern.ParserTest do
   end
 
   describe "pg_ident.conf" do
+    test "joins a continued mapping and keeps each token on its line" do
+      assert {:ok, [mapping, _blank]} = PgIdent.parse("mymap \\\n  alice bob\n")
+      assert %{type: :mapping, map: "mymap", system_user: "alice", pg_user: "bob"} = mapping
+      assert mapping.span == %{line: 1, col: 1, end_line: 2, end_col: 12}
+      assert mapping.pg_span == %{line: 2, col: 9, end_line: 2, end_col: 12}
+    end
+
     test "round trips the stock PostgreSQL fixture" do
       content = fixture!("pg_ident.conf.sample")
 

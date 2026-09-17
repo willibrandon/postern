@@ -41,12 +41,13 @@ defmodule Postern.PgHbaDiagnostics do
   """
   @spec diagnostics(String.t(), String.t() | nil, map()) :: [Diagnostic.t()]
   def diagnostics(text, ident_text \\ nil, options \\ %{}) when is_binary(text) do
-    {:ok, entries} = PgHba.parse(text)
+    version = Map.get(options, :version) || target_version(text, options)
+    continuations = [continuations: PgHbaOptions.continuations?(version)]
+    {:ok, entries} = PgHba.parse(text, continuations)
     tree = Map.get(options, :tree)
     path = if tree, do: Map.get(options, :path)
-    maps = ident_maps(ident_text, Map.get(options, :ident_tree))
+    maps = ident_maps(ident_text, Map.get(options, :ident_tree), continuations)
     report_trust = Map.get(options, :report_trust, true)
-    version = Map.get(options, :version) || target_version(text, options)
     rules = located_rules(tree, entries)
 
     rule_diagnostics =
@@ -555,13 +556,13 @@ defmodule Postern.PgHbaDiagnostics do
 
   # The maps the rules can name: every mapping in the pg_ident.conf tree, or
   # in the text the caller supplied, or nothing to check against.
-  defp ident_maps(_text, %{entries: entries}),
+  defp ident_maps(_text, %{entries: entries}, _continuations),
     do: MapSet.new(for(%{entry: %{type: :mapping, map: map}} <- entries, do: map))
 
-  defp ident_maps(nil, nil), do: nil
+  defp ident_maps(nil, nil, _continuations), do: nil
 
-  defp ident_maps(text, nil) do
-    {:ok, entries} = PgIdent.parse(text)
+  defp ident_maps(text, nil, continuations) do
+    {:ok, entries} = PgIdent.parse(text, continuations)
 
     entries
     |> Enum.filter(&(&1.type == :mapping))

@@ -291,6 +291,29 @@ defmodule Postern.PgHbaDiagnosticsTest do
     assert hint == ~s(on a local socket the server reads "ident" as "peer")
   end
 
+  test "a problem on a continued line is marked where the token is" do
+    text = "host all all 10.0.0.0/8 md5 \\\n  bogus=1\n"
+
+    assert [%{severity: 1, message: message, range: range}] =
+             Postern.PgHbaDiagnostics.diagnostics(text)
+
+    assert message == ~s(unrecognized authentication option name: "bogus")
+    assert range.start == %GenLSP.Structures.Position{line: 1, character: 2}
+
+    # 13 has no continuations: the backslash is one more option on the first
+    # line, and the second line is a rule of its own.
+    older =
+      ("# postern: pg=13\n" <> text)
+      |> Postern.PgHbaDiagnostics.diagnostics()
+      |> Enum.map(&{&1.range.start.line, &1.message})
+      |> Enum.sort()
+
+    assert older == [
+             {1, "authentication option not in name=value format: \\"},
+             {2, ~s(invalid connection type "bogus=1")}
+           ]
+  end
+
   defp fixture!(name) do
     @fixtures
     |> Path.join(name)

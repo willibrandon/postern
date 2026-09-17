@@ -104,7 +104,9 @@ defmodule Postern.ConfigTreeLiveTest do
       # part of the name, and the server would fail to open the file.
       write!(conn, "#{tree}/20-more.conf", [
         "include_if_exists missing.conf",
-        "host postern_more postern_user 10.0.0.0/8 reject"
+        "host postern_more postern_user 10.0.0.0/8 reject",
+        "host postern_continued postern_user 10.0.0.0/8 \\",
+        "  reject"
       ])
 
       write!(conn, "#{tree}/notes.txt", ["host all all all trust"])
@@ -127,6 +129,9 @@ defmodule Postern.ConfigTreeLiveTest do
                )
 
       assert {"#{tree}/20-more.conf", 2} in Enum.map(rows, &List.to_tuple/1)
+      # The continued rule carries the number of the line it starts on.
+      assert {"#{tree}/20-more.conf", 3} in Enum.map(rows, &List.to_tuple/1)
+      refute {"#{tree}/20-more.conf", 4} in Enum.map(rows, &List.to_tuple/1)
       assert [%{severity: 4, message: skipped}] = resolved.problems
       assert skipped == ~s(skipping missing authentication file "#{tree}/missing.conf")
     end

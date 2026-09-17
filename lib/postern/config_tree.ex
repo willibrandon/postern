@@ -82,10 +82,18 @@ defmodule Postern.ConfigTree do
   @doc "Resolves the tree under a root."
   @spec resolve(kind(), Path.t(), Files.t(), keyword()) :: t()
   def resolve(kind, root, files, opts \\ []) do
-    follow =
-      kind == :postgresql_conf or PgHbaOptions.directives?(opts[:version] || Catalog.latest())
+    version = opts[:version] || Catalog.latest()
+    follow = kind == :postgresql_conf or PgHbaOptions.directives?(version)
 
-    state = %{kind: kind, files: files, follow: follow, visited: [], entries: [], problems: []}
+    state = %{
+      kind: kind,
+      files: files,
+      follow: follow,
+      continuations: PgHbaOptions.continuations?(version),
+      visited: [],
+      entries: [],
+      problems: []
+    }
 
     state =
       case files.read.(root) do
@@ -102,9 +110,12 @@ defmodule Postern.ConfigTree do
     }
   end
 
-  @doc "Parses a file of the kind with the parser for it."
-  @spec parse(kind(), String.t()) :: {:ok, [map()]}
-  def parse(kind, text), do: parser(kind).parse(text)
+  @doc "Parses a file of the kind with the parser for it; postgresql.conf takes no options."
+  @spec parse(kind(), String.t(), keyword()) :: {:ok, [map()]}
+  def parse(kind, text, opts \\ [])
+  def parse(:postgresql_conf, text, _opts), do: PostgresqlConf.parse(text)
+  def parse(:pg_hba_conf, text, opts), do: PgHba.parse(text, opts)
+  def parse(:pg_ident_conf, text, opts), do: PgIdent.parse(text, opts)
 
   @doc "The absolute path an include names, from the file that names it."
   @spec absolute(String.t(), Path.t()) :: Path.t()
@@ -144,7 +155,7 @@ defmodule Postern.ConfigTree do
   end
 
   defp walk(state, path, text, depth) do
-    {:ok, entries} = parser(state.kind).parse(text)
+    {:ok, entries} = parse(state.kind, text, continuations: state.continuations)
     state = %{state | visited: [path | state.visited]}
     Enum.reduce(entries, state, &visit(&2, path, depth, &1))
   end
@@ -271,8 +282,4 @@ defmodule Postern.ConfigTree do
   defp reaches?(kind, root, path, files, opts) do
     match?({:ok, _text}, files.read.(root)) and path in resolve(kind, root, files, opts).files
   end
-
-  defp parser(:postgresql_conf), do: PostgresqlConf
-  defp parser(:pg_hba_conf), do: PgHba
-  defp parser(:pg_ident_conf), do: PgIdent
 end

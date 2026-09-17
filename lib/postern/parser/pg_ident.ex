@@ -8,43 +8,18 @@ defmodule Postern.Parser.PgIdent do
   Include directives `include`, `include_if_exists`, `include_dir` are
   also allowed. A token is quoted with double quotes, the only quote
   character the server's tokenizer knows; a single quote is an ordinary
-  character.
+  character. A line that ends with a backslash goes on with the next one,
+  as `Postern.Parser.AuthLines` has it, unless the caller says the target
+  version has no continuations.
 
   Every token carries a span.
   """
 
-  import NimbleParsec
-
-  dq_quoted =
-    ignore(string("\""))
-    |> repeat(
-      choice([
-        string("\"\"") |> replace("\""),
-        utf8_string([not: ?"], min: 1)
-      ])
-    )
-    |> reduce({Enum, :join, [""]})
-    |> ignore(string("\""))
-    |> unwrap_and_tag(:quoted)
-
-  quoted_token = dq_quoted
-
-  unquoted_token =
-    ascii_string([not: ?\s, not: ?\t, not: ?#, not: ?"], min: 1)
-    |> unwrap_and_tag(:unquoted)
-
-  token = choice([quoted_token, unquoted_token])
-
-  defparsec(:parse_token, token)
+  alias Postern.Parser.AuthLines
 
   @include_directives ~w(include include_if_exists include_dir)
 
-  @type span :: %{
-          line: pos_integer(),
-          col: pos_integer(),
-          end_line: pos_integer(),
-          end_col: pos_integer()
-        }
+  @type span :: AuthLines.span()
   @type entry ::
           %{
             type: :mapping,
@@ -72,43 +47,43 @@ defmodule Postern.Parser.PgIdent do
 
   @doc """
   Parses a `pg_ident.conf` file content.
+
+  `continuations: false` reads every line on its own, as a server older
+  than 14 does.
   """
-  @spec parse(String.t()) :: {:ok, [entry()]}
-  def parse(content) when is_binary(content) do
-    lines = String.split(content, "\n", trim: false)
-
-    entries =
-      lines
-      |> Enum.with_index(1)
-      |> Enum.map(fn {raw_line, line_no} ->
-        line = String.trim_trailing(raw_line, "\r")
-        parse_line(line, line_no)
-      end)
-
-    {:ok, entries}
+  @spec parse(String.t(), keyword()) :: {:ok, [entry()]}
+  def parse(content, opts \\ []) when is_binary(content) do
+    records = AuthLines.records(content, Keyword.get(opts, :continuations, true))
+    {:ok, Enum.map(records, &parse_record/1)}
   end
 
+  @doc "Parses one physical line."
   @spec parse_line(String.t(), pos_integer()) :: entry()
-  def parse_line(line, line_no) do
-    trimmed = String.trim(line)
+  def parse_line(line, line_no), do: parse_record(AuthLines.single(line, line_no))
+
+  defp parse_record(%{text: text} = record) do
+    trimmed = String.trim(text)
 
     cond do
       trimmed == "" ->
-        %{type: :blank, span: span_for(line_no, 1, line), raw: line}
+        %{type: :blank, span: AuthLines.span(record), raw: text}
 
       String.starts_with?(trimmed, "#") ->
-        col = column_of(line, "#")
-        %{type: :comment, text: line, span: span_for(line_no, col, line), raw: line}
+        %{
+          type: :comment,
+          text: text,
+          span: AuthLines.span(record, offset_of(text, "#")),
+          raw: text
+        }
 
       true ->
-        {code_part, _comment} = split_comment(line)
+        {code_part, _comment} = split_comment(text)
         code_trimmed = String.trim(code_part)
 
         if code_trimmed == "" do
-          %{type: :comment, text: line, span: span_for(line_no, 1, line), raw: line}
+          %{type: :comment, text: text, span: AuthLines.span(record), raw: text}
         else
-          tokens = tokenize(code_trimmed)
-          parse_tokens(tokens, line, line_no)
+          parse_tokens(tokenize(code_trimmed), record)
         end
     end
   end
@@ -152,7 +127,7 @@ defmodule Postern.Parser.PgIdent do
     do_tokenize(rest, acc, current <> <<c::utf8>>, false, nil)
   end
 
-  defp parse_tokens(tokens, raw_line, line_no) do
+  defp parse_tokens(tokens, %{text: text} = record) do
     case tokens do
       [first | _] when first in @include_directives ->
         case tokens do
@@ -161,55 +136,49 @@ defmodule Postern.Parser.PgIdent do
               type: :include,
               directive: directive,
               file: unquote_token(file),
-              tokens: token_spans(tokens, raw_line, line_no),
-              span: span_for(line_no, 1, raw_line),
-              raw: raw_line
+              tokens: token_spans(tokens, record),
+              span: AuthLines.span(record),
+              raw: text
             }
 
           [_directive] ->
-            %{
-              type: :error,
-              message: "missing file for include directive",
-              span: span_for(line_no, 1, raw_line),
-              raw: raw_line
-            }
+            error("missing file for include directive", record)
         end
 
       [map, sys, pg] ->
+        [map_span, system_span, pg_span] = Enum.map(token_spans(tokens, record), & &1.span)
+
         %{
           type: :mapping,
           map: unquote_token(map),
           system_user: unquote_token(sys),
           pg_user: unquote_token(pg),
-          tokens: token_spans(tokens, raw_line, line_no),
-          map_span: span_for_token(raw_line, map, line_no),
-          system_span: span_for_token(raw_line, sys, line_no),
-          pg_span: span_for_token(raw_line, pg, line_no),
-          span: span_for(line_no, 1, raw_line),
-          raw: raw_line
+          tokens: token_spans(tokens, record),
+          map_span: map_span,
+          system_span: system_span,
+          pg_span: pg_span,
+          span: AuthLines.span(record),
+          raw: text
         }
 
       [_map, _sys, _pg | _rest] ->
-        # Extra tokens — treat as error but keep first three
         %{
           type: :error,
           message: "too many fields, expected MAPNAME SYSTEM-USERNAME PG-USERNAME",
-          span: span_for(line_no, column_of(raw_line, Enum.at(tokens, 3)), raw_line),
-          raw: raw_line
+          span: AuthLines.span(record, Enum.at(token_spans(tokens, record), 3).offset),
+          raw: text
         }
 
       [_ | _] ->
-        %{
-          type: :error,
-          message: "expected MAPNAME SYSTEM-USERNAME PG-USERNAME",
-          span: span_for(line_no, 1, raw_line),
-          raw: raw_line
-        }
+        error("missing entry at end of line", record)
 
       [] ->
-        %{type: :blank, span: span_for(line_no, 1, raw_line), raw: raw_line}
+        %{type: :blank, span: AuthLines.span(record), raw: text}
     end
   end
+
+  defp error(message, %{text: text} = record),
+    do: %{type: :error, message: message, span: AuthLines.span(record), raw: text}
 
   defp unquote_token(token) when is_binary(token) do
     if String.starts_with?(token, "\"") and String.ends_with?(token, "\"") and
@@ -248,49 +217,34 @@ defmodule Postern.Parser.PgIdent do
     do_split(rest, acc <> <<c::utf8>>, in_quote, quote_char)
   end
 
-  defp span_for(line, col, raw) do
-    end_col = col + String.length(raw)
-    %{line: line, col: col, end_line: line, end_col: end_col}
-  end
-
-  defp span_for_token(raw_line, token, line_no) do
-    col = column_of(raw_line, token)
-    end_col = col + String.length(token)
-    %{line: line_no, col: col, end_line: line_no, end_col: end_col}
-  end
-
-  defp column_of(line, substr) do
-    case :binary.match(line, substr) do
-      {pos, _} -> pos + 1
-      :nomatch -> 1
+  defp offset_of(text, substr) do
+    case :binary.match(text, substr) do
+      {pos, _length} -> pos
+      :nomatch -> 0
     end
   end
 
-  defp token_spans(tokens, raw_line, line_no) do
+  # Each token found in the record from where the last one ended, with the
+  # physical line and column it starts and ends on.
+  defp token_spans(tokens, %{text: text} = record) do
     {spans, _offset} =
       Enum.map_reduce(tokens, 0, fn token, offset ->
-        token_size = byte_size(token)
-        remaining_size = byte_size(raw_line) - offset
-        remaining = binary_part(raw_line, offset, max(remaining_size, 0))
+        remaining = binary_part(text, offset, byte_size(text) - offset)
 
-        position =
+        start =
           case :binary.match(remaining, token) do
-            {relative, _length} -> offset + relative + 1
-            :nomatch -> offset + 1
+            {relative, _length} -> offset + relative
+            :nomatch -> offset
           end
 
-        span = %{
-          value: unquote_token(token),
-          raw: token,
-          span: %{
-            line: line_no,
-            col: position,
-            end_line: line_no,
-            end_col: position + String.length(token)
-          }
-        }
+        finish = start + byte_size(token)
 
-        {span, position - 1 + token_size}
+        {%{
+           value: unquote_token(token),
+           raw: token,
+           offset: start,
+           span: AuthLines.span(record, start, finish)
+         }, finish}
       end)
 
     spans
