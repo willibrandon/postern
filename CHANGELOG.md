@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- The Zed extension takes the grammar's 0.1.1 release, in which a single quote is an ordinary
+  character in `pg_hba.conf` and `pg_ident.conf`, as it is to the server. The other packages
+  follow the grammar's main branch and have it already.
 - A line of `pg_hba.conf` or `pg_ident.conf` that ends with a backslash goes on with the next
   one, the way the server has read it since 14, joined as it is, so the continuation works inside
   a quoted token or a comment and an empty line ends the record. The record carries the number

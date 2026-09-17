@@ -14,4 +14,4 @@ language_ids = { "PostgreSQL Config" = "postgresql-conf" }
 
 [grammars.postgresql_conf]
 repository = "https://github.com/willibrandon/tree-sitter-postgresql-conf"
-commit = "0bd95d45847c1c79a51a64c9cedabbfe56779488"
+commit = "751ae1a7b13f871ef507cb09cd648c71e0d48dd1"
