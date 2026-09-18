@@ -33,8 +33,10 @@ log would show after a reload, hint included.
 - `pg_hba.conf` rules that an earlier rule shadows, options that do not apply to the method, a
   file of names given with `@` that the server could not open, a regular expression its engine
   refuses, and ident maps that are missing or unused.
-- Hover with the setting's description, default and range; completion of names, enum values,
-  authentication methods and, with a live connection, database and role names.
+- Hover with the setting's description, default and range, and on `pg_hba.conf` and
+  `pg_ident.conf` with the manual's words for the connection type, the field, the method or
+  the option under the cursor; completion of names, enum values, authentication methods and,
+  with a live connection, database and role names.
 
 ## Install
 
@@ -129,6 +131,7 @@ mix test
 mix credo --strict
 mix format --check-formatted
 mix postern.catalog --source ~/src/postgres   # regenerate priv/catalog from the containers on ports 5413 to 5418
+mix postern.docs --source ~/src/postgres      # regenerate priv/docs from the manual's client-auth.sgml
 PGHOST=127.0.0.1 PGPORT=5418 PGUSER=postgres mix test --only live   # compare the checks with that server
 ```
 
@@ -150,4 +153,5 @@ delete the `.burrito/postern_erts-*` directory when testing a rebuilt binary.
 
 ## License
 
-MIT
+MIT. The hover text for `pg_hba.conf` and `pg_ident.conf` under `priv/docs` is the PostgreSQL
+manual's, under the PostgreSQL License, as `priv/docs/LICENSE` says.

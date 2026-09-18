@@ -64,22 +64,24 @@ defmodule Postern.PostgresqlConfDiagnosticsTest do
   ]
 
   for {version, line, note} <- @history do
-    test "#{line} on #{version}" do
-      [name | _rest] = String.split(unquote(line))
+    [name | _rest] = String.split(line)
+    first = ~s(unrecognized configuration parameter "#{name}")
 
+    expected =
+      case note do
+        nil -> []
+        :nothing -> [{1, first}]
+        note -> [{1, first <> "\n" <> note}]
+      end
+
+    test "#{line} on #{version}" do
       diagnostics =
         Diagnostics.for_document("file:///tmp/postgresql.conf", unquote(line) <> "\n", %{
           "pg" => unquote(version)
         })
         |> Enum.map(&{&1.severity, &1.message})
 
-      first = ~s(unrecognized configuration parameter "#{name}")
-
-      case unquote(note) do
-        nil -> assert diagnostics == []
-        :nothing -> assert diagnostics == [{1, first}]
-        note when is_binary(note) -> assert diagnostics == [{1, first <> "\n" <> note}]
-      end
+      assert diagnostics == unquote(Macro.escape(expected))
     end
   end
 

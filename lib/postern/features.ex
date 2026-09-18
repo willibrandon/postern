@@ -25,8 +25,11 @@ defmodule Postern.Features do
   alias GenLSP.Structures.TextEdit
   alias Postern.Catalog
   alias Postern.ConfigTree
+  alias Postern.Docs
   alias Postern.FileKind
   alias Postern.Files
+  alias Postern.Parser.PgHba
+  alias Postern.Parser.PgIdent
   alias Postern.Parser.PostgresqlConf
   alias Postern.PgHbaOptions
   alias Postern.StringSettings
@@ -45,8 +48,112 @@ defmodule Postern.Features do
   def hover(uri, text, position, options \\ %{}) do
     case option(options, :kind) || FileKind.detect(uri) do
       :postgresql_conf -> postgresql_hover(uri, text, position, options)
+      :pg_hba_conf -> hba_hover(text, position, options)
+      :pg_ident_conf -> ident_hover(text, position, options)
       _ -> nil
     end
+  end
+
+  # The token under the cursor and what it is to the rule: the connection
+  # type, one of the fields, the method, or an option, each with the words
+  # the manual has for it.
+  defp hba_hover(text, position, options) do
+    version = Postern.PostgresqlConfDiagnostics.target_version(text, options, Catalog.versions())
+    docs = Docs.load(version)
+    {:ok, entries} = PgHba.parse(text, continuations: PgHbaOptions.continuations?(version))
+
+    with %{tokens: tokens} = entry <-
+           Enum.find(entries, &(&1.type in [:rule, :include] and covers?(&1, position))),
+         {token, index} <-
+           Enum.find(Enum.with_index(tokens), fn {token, _index} ->
+             within?(token.span, position)
+           end),
+         {title, body} when is_binary(body) <- hba_words(entry, token, index, docs) do
+      %Hover{
+        contents: %MarkupContent{kind: MarkupKind.markdown(), value: "### #{title}\n\n#{body}"},
+        range: span_to_range(token.span)
+      }
+    else
+      _ -> nil
+    end
+  end
+
+  defp hba_words(%{type: :include, directive: directive}, _token, 0, docs),
+    do: {"`#{directive}`", Docs.hba(docs, directive)}
+
+  defp hba_words(%{type: :include}, _token, _index, _docs), do: {nil, nil}
+
+  defp hba_words(%{type: :rule}, token, 0, docs),
+    do: {"`#{token.value}`", Docs.hba(docs, token.value)}
+
+  defp hba_words(%{type: :rule}, _token, 1, docs), do: {"database", Docs.hba(docs, "database")}
+  defp hba_words(%{type: :rule}, _token, 2, docs), do: {"user", Docs.hba(docs, "user")}
+
+  defp hba_words(%{type: :rule, connection_type: type, netmask: mask} = rule, token, index, docs) do
+    cond do
+      token.span == rule.method_span ->
+        {"`#{token.value}`", method_words(docs, token.value)}
+
+      type != "local" and index == 3 ->
+        if mask,
+          do: {"IP-address", Docs.hba(docs, "IP-address")},
+          else: {"address", Docs.hba(docs, "address")}
+
+      type != "local" and index == 4 and mask != nil ->
+        {"IP-mask", Docs.hba(docs, "IP-mask")}
+
+      true ->
+        name = token.value |> String.split("=", parts: 2) |> hd()
+        {"`#{name}`", Docs.option(docs, rule.auth_method, name)}
+    end
+  end
+
+  # The method's own entry, and the title of the section that treats it.
+  defp method_words(docs, method) do
+    case {Docs.hba(docs, method), Docs.method_section(docs, method)} do
+      {nil, _section} -> nil
+      {text, nil} -> text
+      {text, section} -> text <> "\n\nThe manual treats it under \"#{section}\"."
+    end
+  end
+
+  # A pg_ident.conf token gets the field it stands in and the section's
+  # opening, which says how the three fields are read.
+  defp ident_hover(text, position, options) do
+    version = Postern.PostgresqlConfDiagnostics.target_version(text, options, Catalog.versions())
+    docs = Docs.load(version)
+    {:ok, entries} = PgIdent.parse(text, continuations: PgHbaOptions.continuations?(version))
+
+    with %{type: :mapping, tokens: tokens} <-
+           Enum.find(entries, &(&1.type == :mapping and covers?(&1, position))),
+         {token, index} <-
+           Enum.find(Enum.with_index(tokens), fn {token, _index} ->
+             within?(token.span, position)
+           end),
+         body when is_binary(body) <- Docs.maps(docs) do
+      title = Enum.at(["map name", "system user name", "PostgreSQL user name"], index)
+
+      %Hover{
+        contents: %MarkupContent{
+          kind: MarkupKind.markdown(),
+          value: "### #{title} `#{token.value}`\n\n#{body}"
+        },
+        range: span_to_range(token.span)
+      }
+    else
+      _ -> nil
+    end
+  end
+
+  defp covers?(%{span: span}, position),
+    do: span.line - 1 <= position.line and position.line <= span.end_line - 1
+
+  defp within?(span, position) do
+    line = position.line + 1
+    col = position.character + 1
+
+    (span.line < line or (span.line == line and span.col <= col)) and
+      (line < span.end_line or (line == span.end_line and col <= span.end_col))
   end
 
   @doc """

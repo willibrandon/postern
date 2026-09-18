@@ -138,6 +138,123 @@ defmodule Postern.FeaturesTest do
              Enum.find(items, &(&1.label == "pg_stat_statements.max"))
   end
 
+  describe "hover on pg_hba.conf and pg_ident.conf" do
+    @rule "hostssl all +ops 10.0.0.0/8 ldap ldapserver=x ldapsearchfilter=\"(uid=$username)\"\n"
+
+    defp hba_hover(text, character, options \\ %{}) do
+      Features.hover(
+        "file:///pg/pg_hba.conf",
+        text,
+        %Position{line: 0, character: character},
+        Map.merge(%{"pg" => 18}, options)
+      )
+    end
+
+    test "a connection type, a field, the method and an option each get the manual's words" do
+      assert %{contents: %{value: type}, range: range} = hba_hover(@rule, 2)
+      assert type =~ "### `hostssl`"
+      assert type =~ "TCP/IP"
+      assert range.start.character == 0 and range.end.character == 7
+
+      assert %{contents: %{value: database}} = hba_hover(@rule, 9)
+      assert database =~ "### database"
+      assert database =~ "`sameuser`"
+
+      assert %{contents: %{value: user}} = hba_hover(@rule, 13)
+      assert user =~ "### user"
+      assert user =~ "`+`"
+
+      assert %{contents: %{value: address}} = hba_hover(@rule, 18)
+      assert address =~ "### address"
+      assert address =~ "`samenet`"
+
+      assert %{contents: %{value: method}} = hba_hover(@rule, 29)
+      assert method =~ "### `ldap`"
+      assert method =~ "LDAP server"
+      assert method =~ ~s(The manual treats it under "LDAP Authentication".)
+
+      assert %{contents: %{value: option}} = hba_hover(@rule, 34)
+      assert option =~ "### `ldapserver`"
+      assert option =~ "LDAP servers to connect to"
+
+      assert %{contents: %{value: filter}} = hba_hover(@rule, 50)
+      assert filter =~ "### `ldapsearchfilter`"
+      assert filter =~ "search filter"
+    end
+
+    test "a netmask written apart is its own field, and clientcert has the field's text" do
+      text = "hostssl all all 10.0.0.0 255.0.0.0 cert clientcert=verify-full\n"
+      assert %{contents: %{value: ip}} = hba_hover(text, 18)
+      assert ip =~ "### IP-address"
+      assert %{contents: %{value: mask}} = hba_hover(text, 28)
+      assert mask =~ "### IP-mask"
+      assert %{contents: %{value: option}} = hba_hover(text, 42)
+      assert option =~ "### `clientcert`"
+      assert option =~ "clientcert"
+    end
+
+    test "a method's cross reference reads as the section's title" do
+      assert %{contents: %{value: method}} =
+               hba_hover("host all all 10.0.0.0/8 scram-sha-256\n", 26)
+
+      assert method =~ ~s(See "Password Authentication" for details.)
+    end
+
+    test "an include directive and a comment" do
+      assert %{contents: %{value: include}} = hba_hover("include_dir conf.d\n", 3)
+      assert include =~ "### `include_dir`"
+      assert include =~ "`.conf`"
+      assert hba_hover("# a comment\n", 3) == nil
+      assert hba_hover("include_dir conf.d\n", 15) == nil
+    end
+
+    test "pg_ident.conf names the field and opens the section on user name maps" do
+      text = "mymap /^(.*)@example\\.com$ \\1\n"
+
+      assert %{contents: %{value: map}} =
+               Features.hover(
+                 "file:///pg/pg_ident.conf",
+                 text,
+                 %Position{line: 0, character: 2},
+                 %{"pg" => 18}
+               )
+
+      assert map =~ "### map name `mymap`"
+      assert map =~ "user name map"
+
+      assert %{contents: %{value: system}} =
+               Features.hover(
+                 "file:///pg/pg_ident.conf",
+                 text,
+                 %Position{line: 0, character: 10},
+                 %{"pg" => 18}
+               )
+
+      assert system =~ "### system user name"
+
+      assert %{contents: %{value: pg}} =
+               Features.hover(
+                 "file:///pg/pg_ident.conf",
+                 text,
+                 %Position{line: 0, character: 28},
+                 %{"pg" => 18}
+               )
+
+      assert pg =~ "### PostgreSQL user name `\\1`"
+    end
+
+    test "the words are the target version's" do
+      # oauth arrived in 18, so 17's chapter has no entry for it.
+      assert %{contents: %{value: oauth}} =
+               hba_hover("host all all 10.0.0.0/8 oauth issuer=x scope=y\n", 26)
+
+      assert oauth =~ "OAuth"
+
+      assert hba_hover("host all all 10.0.0.0/8 oauth issuer=x scope=y\n", 26, %{"pg" => 17}) ==
+               nil
+    end
+  end
+
   test "hover lists enum values without the literal's quotes" do
     text = "default_transaction_isolation = 'read committed'\n"
     position = %Position{line: 0, character: 3}
