@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+- A number, its unit and a boolean are read the way guc.c reads them. A leading `0` is octal
+  and `0x` is hex, so `log_file_mode = 0600` and `unix_socket_permissions = 0777` are the
+  values the manual gives rather than errors; a fraction rounds to the nearest integer; white
+  space may stand between the number and its unit; the unit is matched as written, so `128mb`
+  is refused with the server's hint naming the units the parameter takes; a fraction of a unit
+  rounds to a multiple of the next smaller one; and a boolean needs two letters of `on` or
+  `off`, so `o` is refused. A value out of range is reported in the server's words, in the
+  base unit and, from 17, with the unit on the bounds too.
 - An enum value with a space in it, `default_transaction_isolation = 'read committed'` say, is
   one of the values again. The catalog holds the array literal `pg_settings` prints, in which
   such a value is double-quoted, and the quotes were being compared as part of the value. The

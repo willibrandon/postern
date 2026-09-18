@@ -18,27 +18,12 @@ defmodule Postern.PostgresqlConfDiagnostics do
   alias GenLSP.Structures.Range
   alias Postern.Catalog
   alias Postern.ConfigTree
+  alias Postern.GucValue
   alias Postern.Parser.PostgresqlConf
 
   @error 1
   @warning 2
   @hint 4
-
-  @boolean_values ~w(on off true false yes no 1 0 t f y n)
-  @unit_factors %{
-    "b" => 1.0,
-    "kb" => 1024.0,
-    "mb" => 1_048_576.0,
-    "gb" => 1_073_741_824.0,
-    "tb" => 1_099_511_627_776.0,
-    "8kb" => 8192.0,
-    "us" => 1.0,
-    "ms" => 1000.0,
-    "s" => 1_000_000.0,
-    "min" => 60_000_000.0,
-    "h" => 3_600_000_000.0,
-    "d" => 86_400_000_000.0
-  }
 
   @doc """
   Produces parser and catalog diagnostics for a `postgresql.conf` document.
@@ -135,8 +120,8 @@ defmodule Postern.PostgresqlConfDiagnostics do
     end
   end
 
-  defp setting_diagnostics(entry, setting, _name, _versions, _catalog) do
-    case validate_value(entry.value, setting) do
+  defp setting_diagnostics(entry, setting, _name, _versions, catalog) do
+    case validate_value(entry.value, setting, catalog.version) do
       :ok -> []
       {:error, message} -> [diagnostic(entry.value_span, @error, message)]
     end
@@ -168,26 +153,83 @@ defmodule Postern.PostgresqlConfDiagnostics do
     end)
   end
 
-  defp validate_value(value, setting) do
-    vartype = setting["vartype"]
-    unit = setting["unit"]
-
-    case vartype do
+  # A value is read the way parse_and_validate_value reads it, and refused in
+  # the server's words: the message it logs, and on a second line the hint
+  # it adds, when it adds one.
+  defp validate_value(value, setting, version) do
+    case setting["vartype"] do
       "bool" -> validate_boolean(value, setting)
       "enum" -> validate_enum(value, setting)
-      type when type in ["integer", "real"] -> validate_numeric(value, setting, unit)
+      "integer" -> validate_integer(value, setting, version)
+      "real" -> validate_real(value, setting, version)
       _ -> :ok
     end
   end
 
   defp validate_boolean(value, setting) do
-    normalized = String.downcase(value)
+    case GucValue.parse_bool(value) do
+      {:ok, _boolean} -> :ok
+      :error -> {:error, ~s(parameter "#{setting["name"]}" requires a Boolean value)}
+    end
+  end
 
-    if normalized in @boolean_values or
-         Enum.any?(~w(on off true false yes no), &String.starts_with?(&1, normalized)) do
-      :ok
+  defp validate_integer(value, setting, version) do
+    case GucValue.parse_int(value, GucValue.base(setting["unit"])) do
+      {:ok, number} -> in_range(number, setting, version, &Integer.to_string/1, &integer/1)
+      {:error, hint} -> {:error, invalid(setting, value, hint)}
+    end
+  end
+
+  defp validate_real(value, setting, version) do
+    case GucValue.parse_real(value, GucValue.base(setting["unit"])) do
+      {:ok, number} -> in_range(number, setting, version, &GucValue.format_g/1, &real/1)
+      {:error, hint} -> {:error, invalid(setting, value, hint)}
+    end
+  end
+
+  # The value is printed in the setting's base unit with the unit's name,
+  # and the bounds carry the name too from 17 on.
+  defp in_range(number, setting, version, print, bound) do
+    min = bound.(setting["min_val"])
+    max = bound.(setting["max_val"])
+
+    if (min != nil and less?(number, min)) or (max != nil and less?(max, number)) do
+      unit = if setting["unit"], do: " " <> setting["unit"], else: ""
+      bounds_unit = if version >= 17, do: unit, else: ""
+
+      {:error,
+       "#{print.(number)}#{unit} is outside the valid range for parameter " <>
+         ~s|"#{setting["name"]}" (#{print.(min)}#{bounds_unit} .. #{print.(max)}#{bounds_unit})|}
     else
-      {:error, "invalid value #{inspect(value)} for boolean setting #{inspect(setting["name"])}"}
+      :ok
+    end
+  end
+
+  defp less?(:negative_infinity, _right), do: true
+  defp less?(_left, :infinity), do: true
+  defp less?(left, right) when is_atom(left) or is_atom(right), do: false
+  defp less?(left, right), do: left < right
+
+  defp invalid(setting, value, hint) do
+    message = ~s(invalid value for parameter "#{setting["name"]}": "#{value}")
+    if hint, do: message <> "\n" <> hint, else: message
+  end
+
+  defp integer(nil), do: nil
+
+  defp integer(value) do
+    case Integer.parse(value) do
+      {number, ""} -> number
+      _other -> nil
+    end
+  end
+
+  defp real(nil), do: nil
+
+  defp real(value) do
+    case Float.parse(value) do
+      {number, ""} -> number
+      _other -> nil
     end
   end
 
@@ -198,118 +240,6 @@ defmodule Postern.PostgresqlConfDiagnostics do
       :ok
     else
       {:error, "value #{inspect(value)} is not one of: #{Enum.join(enum_values, ", ")}"}
-    end
-  end
-
-  defp validate_numeric(value, setting, catalog_unit) do
-    case parse_number(value) do
-      {:ok, number, input_unit} ->
-        case validate_input_unit(input_unit, catalog_unit, setting) do
-          :ok -> compare_numeric(number, input_unit, setting, catalog_unit)
-          {:error, message} -> {:error, message}
-        end
-
-      :error ->
-        {:error,
-         "invalid value #{inspect(value)} for #{setting["vartype"]} setting #{inspect(setting["name"])}"}
-    end
-  end
-
-  defp validate_input_unit(nil, _catalog_unit, _setting), do: :ok
-
-  defp validate_input_unit(input_unit, nil, setting) do
-    {:error, "unit #{inspect(input_unit)} is not allowed for setting #{inspect(setting["name"])}"}
-  end
-
-  defp validate_input_unit(input_unit, catalog_unit, setting) do
-    cond do
-      not Map.has_key?(@unit_factors, String.downcase(input_unit)) ->
-        {:error, "setting could not be applied"}
-
-      unit_dimension(input_unit) != unit_dimension(catalog_unit) ->
-        {:error,
-         "unit #{inspect(input_unit)} is not allowed for setting #{inspect(setting["name"])}"}
-
-      true ->
-        :ok
-    end
-  end
-
-  defp compare_numeric(number, input_unit, setting, catalog_unit) do
-    converted = convert_unit(number, input_unit, catalog_unit)
-    min_value = numeric(setting["min_val"])
-    max_value = numeric(setting["max_val"])
-    integer_value? = setting["vartype"] == "integer" and converted == trunc(converted)
-
-    cond do
-      not integer_value? and setting["vartype"] == "integer" ->
-        {:error, "invalid value #{inspect(setting["name"])}: expected an integer"}
-
-      min_value != nil and converted < min_value ->
-        {:error,
-         "value #{inspect(converted)} is below the minimum #{inspect(setting["min_val"])}"}
-
-      max_value != nil and converted > max_value ->
-        {:error,
-         "value #{inspect(converted)} is above the maximum #{inspect(setting["max_val"])}"}
-
-      true ->
-        :ok
-    end
-  end
-
-  defp parse_number(value) do
-    case Regex.run(~r/^([+-]?(?:\d+(?:\.\d*)?|\.\d+))([A-Za-z]+)?$/, value,
-           capture: :all_but_first
-         ) do
-      [number] ->
-        case parsed_number(number) do
-          {:ok, parsed} -> {:ok, parsed, nil}
-          :error -> :error
-        end
-
-      [number, unit] ->
-        case parsed_number(number) do
-          {:ok, parsed} -> {:ok, parsed, unit}
-          :error -> :error
-        end
-
-      _ ->
-        :error
-    end
-  end
-
-  defp parsed_number(number) do
-    case Float.parse(number) do
-      {value, ""} -> {:ok, value}
-      _ -> :error
-    end
-  end
-
-  defp convert_unit(number, nil, _catalog_unit), do: number
-
-  defp convert_unit(number, input_unit, catalog_unit) do
-    input_factor = Map.get(@unit_factors, String.downcase(input_unit), 1.0)
-    catalog_factor = Map.get(@unit_factors, String.downcase(catalog_unit), 1.0)
-    number * input_factor / catalog_factor
-  end
-
-  defp unit_dimension(unit) when is_binary(unit) do
-    normalized = String.downcase(unit)
-
-    cond do
-      normalized in ~w(b kb mb gb tb 8kb) -> :memory
-      normalized in ~w(us ms s min h d) -> :time
-      true -> :unknown
-    end
-  end
-
-  defp numeric(nil), do: nil
-
-  defp numeric(value) when is_binary(value) do
-    case Float.parse(value) do
-      {number, ""} -> number
-      _ -> nil
     end
   end
 
