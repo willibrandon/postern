@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+- A live diagnostic is placed on the document the server's rows describe, line by line, rather
+  than on any file with the same name: a postgresql.conf is the server's when every row of a
+  file has the document's setting and value on its line, and pg_hba.conf and pg_ident.conf
+  the same with their rules and maps. A file the server reads through a mount is found that
+  way, another cluster's file is not, and a document with unsaved edits above a line keeps
+  the offline diagnostics alone until it is saved.
 - The live code action writes one setting, the one under the cursor, with ALTER SYSTEM SET,
   and its title is the statement, so it is read before it runs; what the server answered
   comes back as a message the editor shows, with what applies the value in the words of the

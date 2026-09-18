@@ -39,7 +39,7 @@ defmodule Postern.Diagnostics do
         {tree, other} = trees(kind, path, text, options)
 
         one_override_per_line(
-          offline(kind, path, text, options, tree, other) ++ live(kind, uri, options)
+          offline(kind, path, text, options, tree, other) ++ live(kind, uri, text, options)
         )
     end
   end
@@ -68,9 +68,10 @@ defmodule Postern.Diagnostics do
     })
   end
 
-  defp live(kind, uri, options) do
+  defp live(kind, uri, text, options) do
     LiveDiagnostics.for_document(
       uri,
+      text,
       option(options, :live_snapshot),
       option(options, :live_configured) || false,
       kind
