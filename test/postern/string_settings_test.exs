@@ -135,7 +135,10 @@ defmodule Postern.StringSettingsTest do
     {"debug_io_direct", "data, nope", {:invalid, ~s(Invalid option "nope".)}},
     {"debug_io_direct", "data,,wal",
      {:invalid, ~s(Invalid list syntax in parameter "debug_io_direct".)}},
-    {"search_path", "a,,b", :ok},
+    {"search_path", "a,,b", {:invalid, "List syntax is invalid."}},
+    {"search_path", ~s("$user", public), :ok},
+    {"search_path", "", :ok},
+    {"temp_tablespaces", "a,,b", {:invalid, "List syntax is invalid."}},
     {"shared_preload_libraries", "anything at all", :ok}
   ]
 
@@ -144,6 +147,23 @@ defmodule Postern.StringSettingsTest do
       assert StringSettings.check(unquote(name), unquote(value), @catalog, 18) ==
                unquote(Macro.escape(expected))
     end
+  end
+
+  test "a detail is worded the way the version words it" do
+    assert StringSettings.check("DateStyle", "ISO, SQL", @catalog, 17) ==
+             {:invalid, ~s(Conflicting "datestyle" specifications.)}
+
+    assert StringSettings.check("recovery_target_timeline", "99999999999999999999", @catalog, 16) ==
+             {:invalid, "recovery_target_timeline is not a valid number."}
+
+    assert StringSettings.check("recovery_target_name", String.duplicate("a", 64), @catalog, 13) ==
+             {:invalid, "recovery_target_name is too long (maximum 63 characters)."}
+
+    assert StringSettings.check("debug_io_direct", "data, nope", @catalog, 16) ==
+             {:invalid, ~s(invalid option "nope")}
+
+    assert StringSettings.check("debug_io_direct", "data,,wal", @catalog, 16) ==
+             {:invalid, ~s(invalid list syntax in parameter "debug_io_direct")}
   end
 
   test "jsonlog is a destination from 15" do

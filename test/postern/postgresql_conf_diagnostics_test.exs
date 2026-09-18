@@ -212,6 +212,8 @@ defmodule Postern.PostgresqlConfDiagnosticsTest do
     {"log_destination = 'STDERR'", nil},
     {"client_encoding = 'UTF-8'", nil},
     {"synchronous_standby_names = 'any 1 (a, \"b c\", *)'", nil},
+    {"search_path = 'a,,b'",
+     ~s(invalid value for parameter "search_path": "a,,b"\nList syntax is invalid.)},
     {"shared_preload_libraries = 'anything'", nil}
   ]
 

@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+- The value checks are compared with a running server in CI, on every version from 13 to 18,
+  the way the include resolver already was. Each line of a fixture goes through ALTER SYSTEM
+  SET, which validates a value as the file does and answers with the words the log would
+  carry, and through a file the server's postgresql.conf includes, where pg_file_settings
+  says whether the server read the line, refused its value or refused the line; from 16 the
+  pg_hba.conf rules go through an included file the same way. The comparison found the list
+  syntax of `search_path` and `temp_tablespaces`, which the file checks where SET quotes
+  the value as one name, and both are checked now.
 - What the postmaster refuses at start is reported before the restart, in the version's words:
   `wal_level = minimal` with WAL archiving on, `max_wal_senders` above zero, which it is by
   default, or `summarize_wal` on, and more than one recovery target; `track_counts`

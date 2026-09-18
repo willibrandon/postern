@@ -128,6 +128,7 @@ mix test
 mix credo --strict
 mix format --check-formatted
 mix postern.catalog --source ~/src/postgres   # regenerate priv/catalog from the containers on ports 5413 to 5418
+PGHOST=127.0.0.1 PGPORT=5418 PGUSER=postgres mix test --only live   # compare the checks with that server
 ```
 
 Release binaries are built with [Burrito](https://github.com/burrito-elixir/burrito), which needs

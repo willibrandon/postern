@@ -7,7 +7,9 @@ defmodule Postern.StringSettings do
   may not disagree, the log destinations a version has, the resource managers
   that can be masked, the encodings and their aliases, the time zone names
   and the POSIX specification a name can fall back to, the recovery targets,
-  and the grammar of `synchronous_standby_names`. Each check answers `:ok`,
+  the grammar of `synchronous_standby_names`, and the list syntax of
+  `search_path` and `temp_tablespaces`, which a file gets wrong where SET
+  cannot, since SET quotes a string constant as one name. Each check answers `:ok`,
   `{:invalid, detail}` for the server's `invalid value for parameter` with the
   detail it adds or `nil`, or `{:error, message}` where the server replaces
   the message altogether. The words come from a running 18 and the source of
@@ -30,7 +32,7 @@ defmodule Postern.StringSettings do
   def check(name, value, catalog, version),
     do: hook(String.downcase(name), value, catalog, version)
 
-  defp hook("datestyle", value, _catalog, _version), do: datestyle(value)
+  defp hook("datestyle", value, _catalog, version), do: datestyle(value, version)
   defp hook("timezone", value, catalog, _version), do: timezone(value, catalog)
   defp hook("log_timezone", value, catalog, _version), do: timezone(value, catalog)
 
@@ -44,11 +46,18 @@ defmodule Postern.StringSettings do
   defp hook("recovery_target", value, _catalog, _version), do: recovery_target(value)
   defp hook("recovery_target_lsn", value, _catalog, _version), do: lsn(value)
   defp hook("recovery_target_xid", value, _catalog, _version), do: number(value, nil)
-  defp hook("recovery_target_timeline", value, _catalog, _version), do: timeline(value)
-  defp hook("recovery_target_name", value, _catalog, _version), do: target_name(value)
+  defp hook("recovery_target_timeline", value, _catalog, version), do: timeline(value, version)
+  defp hook("recovery_target_name", value, _catalog, version), do: target_name(value, version)
   defp hook("recovery_target_time", value, _catalog, _version), do: target_time(value)
   defp hook("synchronous_standby_names", value, _catalog, _version), do: standby_names(value)
-  defp hook("debug_io_direct", value, _catalog, _version), do: io_direct(value)
+  defp hook("debug_io_direct", value, _catalog, version), do: io_direct(value, version)
+
+  defp hook("search_path", value, _catalog, _version),
+    do: with({:ok, _names} <- list(value), do: :ok)
+
+  defp hook("temp_tablespaces", value, _catalog, _version),
+    do: with({:ok, _names} <- list(value), do: :ok)
+
   defp hook(_name, _value, _catalog, _version), do: :ok
 
   @doc "The values worth offering for a string setting, for completion."
@@ -140,17 +149,21 @@ defmodule Postern.StringSettings do
   # conflict. GERMAN also sets DMY, but not as an order given, so an order
   # after it is no conflict, and DEFAULT takes what the server was built
   # with.
-  defp datestyle(value) do
+  defp datestyle(value, version) do
     with {:ok, words} <- list(value) do
       words
       |> Enum.reduce_while({:ok, %{style: nil, order: nil, given: false}}, &datestyle_step/2)
       |> case do
         {:ok, _state} -> :ok
-        :conflict -> {:invalid, ~s(Conflicting "DateStyle" specifications.)}
+        :conflict -> {:invalid, ~s(Conflicting "#{datestyle_name(version)}" specifications.)}
         invalid -> invalid
       end
     end
   end
+
+  # 18 started writing the setting's name in its own case in the detail.
+  defp datestyle_name(version) when version >= 18, do: "DateStyle"
+  defp datestyle_name(_version), do: "datestyle"
 
   defp datestyle_step(word, {:ok, state}) do
     case datestyle_word(word) do
@@ -364,14 +377,22 @@ defmodule Postern.StringSettings do
     if magnitude > @uint64_max, do: {:invalid, detail}, else: :ok
   end
 
-  defp timeline(value) when value in ["current", "latest"], do: :ok
-  defp timeline(value), do: number(value, ~s("recovery_target_timeline" is not a valid number.))
+  defp timeline(value, _version) when value in ["current", "latest"], do: :ok
 
-  defp target_name(value) do
+  defp timeline(value, version),
+    do: number(value, "#{named(version, "recovery_target_timeline")} is not a valid number.")
+
+  defp target_name(value, version) do
     if byte_size(value) >= 64,
-      do: {:invalid, ~s|"recovery_target_name" is too long (maximum 63 characters).|},
+      do:
+        {:invalid,
+         "#{named(version, "recovery_target_name")} is too long (maximum 63 characters)."},
       else: :ok
   end
+
+  # 17 put quotes around a setting's name in these details.
+  defp named(version, name) when version >= 17, do: ~s("#{name}")
+  defp named(_version, name), do: name
 
   # The server parses a timestamp with time zone and refuses the special
   # words; what it would make of every other string is its own, so only a
@@ -493,16 +514,22 @@ defmodule Postern.StringSettings do
   defp standby_list_after_comma([token | _rest]), do: {:near, elem(token, 1)}
   defp standby_list_after_comma([]), do: :end
 
-  defp io_direct(value) do
+  # 16's details were lower case without a period; 17 gave them a capital
+  # and one.
+  defp io_direct(value, version) do
     case split_identifiers(value, downcase: false) do
       {:ok, words} ->
         case Enum.find(words, &(String.downcase(&1) not in @io_direct)) do
           nil -> :ok
-          word -> {:invalid, ~s(Invalid option "#{word}".)}
+          word when version >= 17 -> {:invalid, ~s(Invalid option "#{word}".)}
+          word -> {:invalid, ~s(invalid option "#{word}")}
         end
 
-      :error ->
+      :error when version >= 17 ->
         {:invalid, ~s(Invalid list syntax in parameter "debug_io_direct".)}
+
+      :error ->
+        {:invalid, ~s(invalid list syntax in parameter "debug_io_direct")}
     end
   end
 end

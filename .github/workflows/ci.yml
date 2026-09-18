@@ -28,18 +28,6 @@ jobs:
       fail-fast: false
       matrix:
         postgres: [13, 14, 15, 16, 17, 18]
-    services:
-      postgres:
-        image: postgres:${{ matrix.postgres }}
-        env:
-          POSTGRES_HOST_AUTH_METHOD: trust
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -52,7 +40,14 @@ jobs:
       - run: mix deps.get
       - run: mix compile --warnings-as-errors
       - run: mix test
-      - name: Compare the include tree with pg_file_settings on the server
+      # The modules that define their settings only when preloaded are
+      # preloaded, so that the server checks their values as the catalogs do.
+      - name: Start PostgreSQL
+        run: |
+          docker run -d --name postgres -e POSTGRES_HOST_AUTH_METHOD=trust -p 5432:5432 \
+            postgres:${{ matrix.postgres }} -c shared_preload_libraries=pg_stat_statements,pg_prewarm,auto_explain
+          for i in $(seq 1 30); do docker exec postgres pg_isready -U postgres && break; sleep 1; done
+      - name: Compare the checks with the server, value by value and line by line
         run: mix test --only live
         env:
           PGHOST: 127.0.0.1
