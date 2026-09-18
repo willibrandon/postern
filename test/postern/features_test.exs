@@ -19,6 +19,66 @@ defmodule Postern.FeaturesTest do
     assert value =~ "takes effect after a server restart"
   end
 
+  test "hover lists enum values without the literal's quotes" do
+    text = "default_transaction_isolation = 'read committed'\n"
+    position = %Position{line: 0, character: 3}
+
+    %{contents: %{value: value}} =
+      Features.hover("file:///tmp/postgresql.conf", text, position, %{"pg" => 18})
+
+    assert value =~
+             "**Values:** `serializable`, `repeatable read`, `read committed`, `read uncommitted`"
+  end
+
+  test "completion quotes a value the file cannot take bare" do
+    text = "default_transaction_isolation = re\n"
+    uri = "file:///tmp/postgresql.conf"
+
+    %{items: items} =
+      Features.completion(uri, text, %Position{line: 0, character: 34}, %{"pg" => 18})
+
+    assert Enum.map(items, & &1.label) == [
+             "repeatable read",
+             "read committed",
+             "read uncommitted"
+           ]
+
+    assert Enum.map(items, & &1.insert_text) == [
+             "'repeatable read'",
+             "'read committed'",
+             "'read uncommitted'"
+           ]
+
+    # A quote the user has already opened is not doubled, and one the editor
+    # closed for them is left where it is.
+    %{items: [item | _]} =
+      Features.completion(uri, "wal_level = 'lo\n", %Position{line: 0, character: 15}, %{
+        "pg" => 18
+      })
+
+    assert item.insert_text == "logical"
+
+    %{items: [item | _]} =
+      Features.completion(
+        uri,
+        "default_transaction_isolation = 'read\n",
+        %Position{line: 0, character: 37},
+        %{"pg" => 18}
+      )
+
+    assert item.insert_text == "read committed'"
+
+    %{items: [item | _]} =
+      Features.completion(
+        uri,
+        "default_transaction_isolation = 'read'\n",
+        %Position{line: 0, character: 37},
+        %{"pg" => 18}
+      )
+
+    assert item.insert_text == "read committed"
+  end
+
   describe "with the tree of files the server reads" do
     setup do
       files =

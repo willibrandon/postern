@@ -58,6 +58,21 @@ defmodule Postern.PostgresqlConfDiagnosticsTest do
     assert diagnostic.range.start.character == 0
   end
 
+  test "an enum value with a space in it is one of the values" do
+    text = "default_transaction_isolation = 'read committed'\n"
+    assert Diagnostics.for_document("file:///tmp/postgresql.conf", text, %{"pg" => 18}) == []
+
+    [diagnostic] =
+      Diagnostics.for_document(
+        "file:///tmp/postgresql.conf",
+        "default_transaction_isolation = 'read commited'\n",
+        %{"pg" => 18}
+      )
+
+    assert diagnostic.message ==
+             ~s(value "read commited" is not one of: serializable, repeatable read, read committed, read uncommitted)
+  end
+
   test "a malformed value is one error on its value span" do
     [diagnostic] =
       Diagnostics.for_document("file:///tmp/postgresql.conf", "shared_buffers = 128QB\n", %{

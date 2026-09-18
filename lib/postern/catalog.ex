@@ -13,6 +13,8 @@ defmodule Postern.Catalog do
   Loads the catalog for a PostgreSQL major version.
 
   The returned map contains the version and settings indexed by setting name.
+  The generator selects `enumvals` through the text protocol, so a row holds
+  the array literal the server prints, `{a,"b c"}`; here it becomes a list.
   """
   @spec load(pos_integer(), keyword()) :: %{version: pos_integer(), settings: map()}
   def load(version, opts \\ []) when is_integer(version) do
@@ -22,7 +24,7 @@ defmodule Postern.Catalog do
          {:ok, %{"settings" => settings}} <- Jason.decode(json) do
       %{
         version: version,
-        settings: Map.new(settings, &{Map.fetch!(&1, "name"), &1})
+        settings: Map.new(settings, &{Map.fetch!(&1, "name"), with_enum_list(&1)})
       }
     else
       {:error, reason} ->
@@ -65,6 +67,72 @@ defmodule Postern.Catalog do
   @doc "Returns the source field names expected in every generated setting row."
   @spec required_fields() :: [String.t()]
   def required_fields, do: @required_fields
+
+  @doc """
+  The elements of a PostgreSQL array literal, as `array_out` prints one.
+
+  An element is double-quoted when it holds a comma, a brace, a quote, a
+  backslash or white space, or is empty, and inside the quotes a backslash
+  escapes the next character. A list is returned as it is, and anything else
+  is no elements.
+
+  ## Examples
+
+      iex> Postern.Catalog.array_literal(~s({serializable,"repeatable read","read committed"}))
+      ["serializable", "repeatable read", "read committed"]
+
+      iex> Postern.Catalog.array_literal(~S({"a\\"b","c\\\\d",""}))
+      [~S(a"b), ~S(c\\d), ""]
+
+      iex> Postern.Catalog.array_literal("{}")
+      []
+
+  """
+  @spec array_literal(String.t() | [String.t()] | nil) :: [String.t()]
+  def array_literal(list) when is_list(list), do: list
+
+  def array_literal("{" <> rest) do
+    rest
+    |> String.trim_trailing("}")
+    |> elements([], "", false)
+  end
+
+  def array_literal(_other), do: []
+
+  defp with_enum_list(setting),
+    do: Map.update(setting, "enumvals", nil, &enum_list/1)
+
+  defp enum_list(nil), do: nil
+  defp enum_list(values), do: array_literal(values)
+
+  # The elements so far, the one being read, and whether the reader has
+  # just closed a quoted element, after which only a comma or the end may
+  # follow. A quoted element may be empty, so the quotes themselves mark
+  # that an element was read.
+  defp elements("", acc, current, _closed), do: finish(acc, current)
+
+  defp elements(<<?", rest::binary>>, acc, current, false), do: quoted(rest, acc, current)
+
+  defp elements(<<?,, rest::binary>>, acc, current, _closed),
+    do: elements(rest, [current | acc], "", false)
+
+  defp elements(<<char::utf8, rest::binary>>, acc, current, false),
+    do: elements(rest, acc, current <> <<char::utf8>>, false)
+
+  defp elements(_rest, acc, current, true), do: finish(acc, current)
+
+  defp quoted(<<?\\, char::utf8, rest::binary>>, acc, current),
+    do: quoted(rest, acc, current <> <<char::utf8>>)
+
+  defp quoted(<<?", rest::binary>>, acc, current), do: elements(rest, acc, current, true)
+
+  defp quoted(<<char::utf8, rest::binary>>, acc, current),
+    do: quoted(rest, acc, current <> <<char::utf8>>)
+
+  defp quoted("", acc, current), do: finish(acc, current)
+
+  defp finish([], ""), do: []
+  defp finish(acc, current), do: Enum.reverse([current | acc])
 
   defp catalog_dir(opts) do
     Keyword.get(opts, :catalog_dir, Path.join(:code.priv_dir(:postern), "catalog"))

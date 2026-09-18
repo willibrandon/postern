@@ -217,7 +217,7 @@ defmodule Postern.Features do
   defp optional_detail(label, value), do: "**#{label}:** `#{value}`"
 
   defp range_detail(setting) do
-    enum_values = setting["enumvals"]
+    enum_values = Catalog.array_literal(setting["enumvals"])
 
     cond do
       is_list(enum_values) and enum_values != [] ->
@@ -248,7 +248,8 @@ defmodule Postern.Features do
           Postern.PostgresqlConfDiagnostics.target_version(text, options, Catalog.versions())
 
         setting = Catalog.fetch(Catalog.load(version), name)
-        value_completion(setting, prefix)
+        after_cursor = String.slice(line, min(position.character, String.length(line))..-1//1)
+        value_completion(setting, prefix, before, after_cursor)
 
       _ ->
         version =
@@ -261,19 +262,40 @@ defmodule Postern.Features do
     end
   end
 
-  defp value_completion(nil, _prefix), do: []
+  defp value_completion(nil, _prefix, _before, _after_cursor), do: []
 
-  defp value_completion(setting, prefix) do
+  defp value_completion(setting, prefix, before, after_cursor) do
     values =
       case setting["vartype"] do
-        "enum" -> enum_values(setting["enumvals"])
+        "enum" -> Catalog.array_literal(setting["enumvals"])
         "bool" -> @boolean_values
         _ -> []
       end
 
+    opened = String.ends_with?(String.slice(before, 0..-(String.length(prefix) + 1)//1), "'")
+    closed = String.starts_with?(after_cursor, "'")
+
     values
     |> Enum.filter(&String.starts_with?(String.downcase(&1), String.downcase(prefix)))
-    |> Enum.map(&completion_item(&1, CompletionItemKind.value(), setting["vartype"]))
+    |> Enum.map(fn value ->
+      %CompletionItem{
+        completion_item(value, CompletionItemKind.value(), setting["vartype"])
+        | insert_text: value_text(value, opened, closed)
+      }
+    end)
+  end
+
+  # A value the file takes bare is a letter followed by letters, digits and a
+  # few punctuation marks, or a number; anything else, such as an isolation
+  # level with a space in it, is quoted, unless the quote is already there.
+  defp value_text(value, opened, closed) do
+    cond do
+      Regex.match?(~r{^[A-Za-z_][A-Za-z0-9_.:/-]*$}, value) -> value
+      Regex.match?(~r/^[+-]?[0-9]+$/, value) -> value
+      opened and closed -> value
+      opened -> value <> "'"
+      true -> "'" <> value <> "'"
+    end
   end
 
   defp hba_completion(text, position, options) do
@@ -343,16 +365,6 @@ defmodule Postern.Features do
 
   defp completion_item(label, kind, detail) do
     %CompletionItem{label: label, kind: kind, detail: detail}
-  end
-
-  defp enum_values(values) when is_list(values), do: values
-  defp enum_values(nil), do: []
-
-  defp enum_values(values) when is_binary(values) do
-    values
-    |> String.trim_leading("{")
-    |> String.trim_trailing("}")
-    |> String.split(",", trim: true)
   end
 
   defp entry_at(entries, position) do

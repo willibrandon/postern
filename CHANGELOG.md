@@ -1,5 +1,13 @@
 # Changelog
 
+## [Unreleased]
+
+- An enum value with a space in it, `default_transaction_isolation = 'read committed'` say, is
+  one of the values again. The catalog holds the array literal `pg_settings` prints, in which
+  such a value is double-quoted, and the quotes were being compared as part of the value. The
+  literal is decoded when the catalog loads, so the check, the hover and completion all see the
+  bare value, and completion inserts a value that needs quoting in the file with its quotes.
+
 ## [0.2.1] - 2026-09-17
 
 - Paths are compared in one canonical form and a file URI carries a Windows drive the way

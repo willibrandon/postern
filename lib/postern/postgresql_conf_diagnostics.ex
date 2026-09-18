@@ -192,7 +192,7 @@ defmodule Postern.PostgresqlConfDiagnostics do
   end
 
   defp validate_enum(value, setting) do
-    enum_values = enum_values(setting["enumvals"])
+    enum_values = Catalog.array_literal(setting["enumvals"])
 
     if value in enum_values do
       :ok
@@ -311,16 +311,6 @@ defmodule Postern.PostgresqlConfDiagnostics do
       {number, ""} -> number
       _ -> nil
     end
-  end
-
-  defp enum_values(values) when is_list(values), do: values
-  defp enum_values(nil), do: []
-
-  defp enum_values(values) when is_binary(values) do
-    values
-    |> String.trim_leading("{")
-    |> String.trim_trailing("}")
-    |> String.split(",", trim: true)
   end
 
   defp option(options, key) when is_map(options), do: options[key] || options[Atom.to_string(key)]
