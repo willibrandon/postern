@@ -10,13 +10,17 @@ defmodule Postern.PgHbaDiagnostics do
   options, a rule is weighed against every rule the server reads before it,
   in this file or one included earlier, and an include the server could not
   follow gets its error. An `:ident_tree` supplies the maps from the whole
-  `pg_ident.conf` tree.
+  `pg_ident.conf` tree. A database or user field that starts with `@` names
+  a file of names, read through the `:reader` relative to the file the rule
+  is in, the way the server reads it, and a file it could not open is the
+  rule's error.
   """
 
   alias GenLSP.Structures.Diagnostic
   alias GenLSP.Structures.Position
   alias GenLSP.Structures.Range
   alias Postern.ConfigTree
+  alias Postern.Files
   alias Postern.Parser.PgHba
   alias Postern.Parser.PgIdent
   alias Postern.PgHbaOptions
@@ -48,14 +52,23 @@ defmodule Postern.PgHbaDiagnostics do
     path = if tree, do: Map.get(options, :path)
     maps = ident_maps(ident_text, Map.get(options, :ident_tree), continuations)
     report_trust = Map.get(options, :report_trust, true)
-    rules = located_rules(tree, entries)
+    reader = Map.get(options, :reader)
+    rules = tree |> located_rules(entries) |> Enum.map(&expand(&1, path, reader, version))
 
     rule_diagnostics =
       rules
       |> Enum.with_index()
       |> Enum.flat_map(fn
-        {%{path: ^path, entry: rule}, index} ->
-          rule_diagnostics(rule, version, maps, report_trust, path, Enum.take(rules, index))
+        {%{path: ^path, entry: rule, problems: problems}, index} ->
+          rule_diagnostics(
+            rule,
+            problems,
+            version,
+            maps,
+            report_trust,
+            path,
+            Enum.take(rules, index)
+          )
 
         _elsewhere ->
           []
@@ -66,9 +79,13 @@ defmodule Postern.PgHbaDiagnostics do
       rule_diagnostics ++ include_diagnostics(tree, path)
   end
 
-  # The server stops at a method it does not know, so that is all it says
-  # about the rule; the parser has already refused an address it would.
-  defp rule_diagnostics(rule, version, maps, report_trust, path, previous) do
+  # A file of names the server could not open fails the line before it is a
+  # rule, so that is all it says; then it stops at a method it does not
+  # know; the parser has already refused an address it would.
+  defp rule_diagnostics(_rule, [problem | _rest], _version, _maps, _trust, _path, _previous),
+    do: [diagnostic(problem.span, @error, problem.message)]
+
+  defp rule_diagnostics(rule, [], version, maps, report_trust, path, previous) do
     address_advice(rule) ++
       case method_diagnostics(rule, version) do
         [] ->
@@ -307,6 +324,106 @@ defmodule Postern.PgHbaDiagnostics do
 
   defp located_rules(tree, _entries),
     do: for(%{entry: %{type: :rule}} = located <- tree.entries, do: located)
+
+  # A rule with its @files read: the names they hold stand in for the
+  # tokens in its database and user lists, so that a later rule is weighed
+  # against the names that count, and a file that could not be opened is a
+  # problem on the field that names it.
+  defp expand(%{entry: rule} = located, document_path, reader, version) do
+    from = located.path || document_path
+    {databases, database_problems} = expand_names(rule.databases, from, reader, version, 1, rule)
+    {users, user_problems} = expand_names(rule.users, from, reader, version, 2, rule)
+
+    located
+    |> Map.put(:entry, %{rule | databases: databases, users: users})
+    |> Map.put(:problems, database_problems ++ user_problems)
+  end
+
+  defp expand_names(names, from, reader, version, field, rule) do
+    Enum.reduce(names, {[], []}, fn name, {expanded, problems} ->
+      case secondary(name, from, reader, version, 0) do
+        {:ok, found} ->
+          {expanded ++ found, problems}
+
+        {:error, message} ->
+          {expanded, problems ++ [%{span: field_span(rule, field), message: message}]}
+
+        :name ->
+          {expanded ++ [name], problems}
+      end
+    end)
+  end
+
+  defp field_span(%{tokens: tokens, span: span}, index) do
+    case Enum.at(tokens, index) do
+      %{span: field} -> field
+      nil -> span
+    end
+  end
+
+  # The file named after the @, relative to the file the rule is in, read
+  # for its names: separated by white space or commas, with # comments and
+  # double quotes as in pg_hba.conf itself, and nested @files to the depth
+  # the server allows.
+  defp secondary("@" <> name, from, %Files{read: read} = files, version, depth)
+       when from != nil do
+    target = ConfigTree.absolute(name, from)
+
+    if depth >= 10 do
+      {:error, ~s(could not open file "#{target}": maximum nesting depth exceeded)}
+    else
+      case read.(target) do
+        {:ok, text} -> secondary_file(text, target, files, version, depth)
+        :error -> {:error, missing_secondary(name, target, version)}
+      end
+    end
+  end
+
+  defp secondary(_name, _from, _reader, _version, _depth), do: :name
+
+  # The names in a file, with a nested @file's names in its place, or the
+  # first file that could not be opened.
+  defp secondary_file(text, target, files, version, depth) do
+    Enum.reduce_while(secondary_tokens(text), {:ok, []}, fn token, {:ok, names} ->
+      case secondary(token, target, files, version, depth + 1) do
+        {:ok, found} -> {:cont, {:ok, names ++ found}}
+        :name -> {:cont, {:ok, names ++ [token]}}
+        {:error, message} -> {:halt, {:error, message}}
+      end
+    end)
+  end
+
+  # 16 stopped naming the token and names the file the way it names an
+  # include it could not open.
+  defp missing_secondary(_name, target, version) when version >= 16,
+    do: ~s(could not open file "#{target}": No such file or directory)
+
+  defp missing_secondary(name, target, _version),
+    do:
+      ~s(could not open secondary authentication file "@#{name}" as "#{target}": No such file or directory)
+
+  defp secondary_tokens(text) do
+    text
+    |> String.split("\n")
+    |> Enum.flat_map(fn line ->
+      line
+      |> strip_comment()
+      |> String.split(~r/[\s,]+/, trim: true)
+      |> Enum.map(&unquote_name/1)
+    end)
+  end
+
+  defp strip_comment(line) do
+    case Regex.run(~r/^((?:[^"#]|"[^"]*")*)/, line) do
+      [_all, code] -> code
+      nil -> line
+    end
+  end
+
+  defp unquote_name(<<?", rest::binary>>),
+    do: rest |> String.trim_trailing("\"") |> String.replace(~s(""), ~s("))
+
+  defp unquote_name(name), do: name
 
   defp include_diagnostics(nil, _path), do: []
 

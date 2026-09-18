@@ -65,7 +65,10 @@ defmodule Postern.Features do
     end
   end
 
-  @doc "Links from the include lines to the files they name, for the ones that are there."
+  @doc """
+  Links from the include lines to the files they name, and from a pg_hba.conf
+  field that names a file of names with `@`, for the ones that are there.
+  """
   @spec document_links(String.t(), String.t(), map() | keyword()) :: [DocumentLink.t()]
   def document_links(uri, text, options \\ %{}) do
     with kind when kind != :unknown <- option(options, :kind) || FileKind.detect(uri),
@@ -73,18 +76,30 @@ defmodule Postern.Features do
       path = path_of(uri)
       {:ok, entries} = ConfigTree.parse(kind, text)
 
-      for %{type: :include, directive: directive, file: file} = entry <- entries,
-          directive != "include_dir",
-          target = ConfigTree.absolute(file, path),
-          match?({:ok, _text}, read.(target)) do
-        %DocumentLink{
-          range: span_to_range(ConfigTree.include_span(entry)),
-          target: FileKind.path_to_uri(target)
-        }
-      end
+      Enum.flat_map(entries, &entry_links(&1, path, read))
     else
       _ -> []
     end
+  end
+
+  defp entry_links(%{type: :include, directive: "include_dir"}, _path, _read), do: []
+
+  defp entry_links(%{type: :include, file: file} = entry, path, read),
+    do: link(ConfigTree.include_span(entry), ConfigTree.absolute(file, path), read)
+
+  # The database and user fields of a rule, when they name a file.
+  defp entry_links(%{type: :rule, tokens: tokens}, path, read) do
+    for %{value: "@" <> file, span: span} <- Enum.slice(tokens, 1, 2),
+        link <- link(span, ConfigTree.absolute(file, path), read),
+        do: link
+  end
+
+  defp entry_links(_entry, _path, _read), do: []
+
+  defp link(span, target, read) do
+    if match?({:ok, _text}, read.(target)),
+      do: [%DocumentLink{range: span_to_range(span), target: FileKind.path_to_uri(target)}],
+      else: []
   end
 
   @doc "Quick fixes for diagnostics in the request context that carry one."

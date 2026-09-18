@@ -30,8 +30,9 @@ log would show after a reload, hint included.
   `conf.d` file overrides is marked where it stands, and an include the server could not open
   is an error. Hover says where the value that counts is set, go to definition goes there, and
   an include line links to its file.
-- `pg_hba.conf` rules that an earlier rule shadows, options that do not apply to the method, and
-  ident maps that are missing or unused.
+- `pg_hba.conf` rules that an earlier rule shadows, options that do not apply to the method, a
+  file of names given with `@` that the server could not open, and ident maps that are missing
+  or unused.
 - Hover with the setting's description, default and range; completion of names, enum values,
   authentication methods and, with a live connection, database and role names.
 

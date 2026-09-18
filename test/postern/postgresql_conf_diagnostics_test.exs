@@ -78,7 +78,7 @@ defmodule Postern.PostgresqlConfDiagnosticsTest do
       case unquote(note) do
         nil -> assert diagnostics == []
         :nothing -> assert diagnostics == [{1, first}]
-        note -> assert diagnostics == [{1, first <> "\n" <> note}]
+        note when is_binary(note) -> assert diagnostics == [{1, first <> "\n" <> note}]
       end
     end
   end

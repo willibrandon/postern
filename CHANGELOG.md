@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+- A database or user field of pg_hba.conf that starts with `@` names a file of names, read
+  relative to the file the rule is in, separated by white space or commas, with comments and
+  nested files as the server reads them. The names stand in for the token, so a later rule
+  is weighed against the names that count, a file the server could not open is the rule's
+  error in the version's words, and the field links to the file.
 - The value checks are compared with a running server in CI, on every version from 13 to 18,
   the way the include resolver already was. Each line of a fixture goes through ALTER SYSTEM
   SET, which validates a value as the file does and answers with the words the log would

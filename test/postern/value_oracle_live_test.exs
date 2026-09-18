@@ -151,7 +151,8 @@ defmodule Postern.ValueOracleLiveTest do
     "host all all 10.0.0.0 ::1 md5",
     "host all 10.0.0.0/8 md5",
     "hostx all all 10.0.0.0/8 md5",
-    "host all,all all 10.0.0.0/8 md5 md5"
+    "host all,all all 10.0.0.0/8 md5 md5",
+    "host all @admins 10.0.0.0/8 scram-sha-256"
   ]
 
   setup_all do
@@ -270,11 +271,16 @@ defmodule Postern.ValueOracleLiveTest do
         )
         |> Map.new(fn [line, error] -> {line, error} end)
 
+      # The rules are read with the reader the editor would have for them,
+      # which sees the file and nothing beside it, as the server does.
+      text = Enum.join(@rules, "\n") <> "\n"
+
       diagnostics =
-        Diagnostics.for_document("file://#{path}", Enum.join(@rules, "\n") <> "\n", %{
+        Diagnostics.for_document("file://#{path}", text, %{
           "pg" => version,
           kind: :pg_hba_conf,
-          reportTrust: false
+          reportTrust: false,
+          reader: Postern.Files.in_memory(%{path => text})
         })
 
       postern =

@@ -54,7 +54,8 @@ defmodule Postern.Diagnostics do
       version: target_version(text, options),
       tree: tree,
       path: path,
-      ident_tree: ident_tree
+      ident_tree: ident_tree,
+      reader: option(options, :reader)
     })
   end
 

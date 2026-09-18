@@ -319,4 +319,84 @@ defmodule Postern.PgHbaDiagnosticsTest do
     |> Path.join(name)
     |> File.read!()
   end
+
+  # The reader the editor would have: the document as it is, and the files
+  # it names beside it.
+  defp files(text) do
+    Postern.Files.in_memory(%{
+      "/pg/pg_hba.conf" => text,
+      "/pg/admins" => "alice, bob   # the admins\n\"carol c\" @more\n",
+      "/pg/more" => "dave\n",
+      "/pg/loop" => "@loop\n"
+    })
+  end
+
+  describe "a field that names a file of names with @" do
+    test "stands for the names in the file, so a later rule is shadowed by them" do
+      text =
+        "host all @admins 10.0.0.0/8 md5\nhost all dave 10.0.0.0/8 md5\nhost all erin 10.0.0.0/8 md5\n"
+
+      diagnostics =
+        Postern.Diagnostics.for_document("file:///pg/pg_hba.conf", text, %{
+          "pg" => 18,
+          reader: files(text)
+        })
+
+      assert [%{severity: 2, message: message, range: %{start: %{line: 1}}}] =
+               Enum.reject(diagnostics, &(&1.code == "trust"))
+
+      assert message =~ "an earlier rule on line 1 shadows it"
+    end
+
+    test "is an error in the version's words when the file cannot be opened" do
+      text = "host all @nobody 10.0.0.0/8 md5\n"
+
+      [diagnostic] =
+        Postern.Diagnostics.for_document("file:///pg/pg_hba.conf", text, %{
+          "pg" => 18,
+          reader: files(text)
+        })
+
+      assert diagnostic.severity == 1
+
+      assert diagnostic.message ==
+               ~s(could not open file "#{Path.expand("/pg/nobody")}": No such file or directory)
+
+      assert diagnostic.range.start.character == 9
+      assert diagnostic.range.end.character == 16
+
+      [diagnostic] =
+        Postern.Diagnostics.for_document("file:///pg/pg_hba.conf", text, %{
+          "pg" => 15,
+          reader: files(text)
+        })
+
+      assert diagnostic.message ==
+               ~s(could not open secondary authentication file "@nobody" as "#{Path.expand("/pg/nobody")}": No such file or directory)
+    end
+
+    test "a file that names itself stops at the depth the server allows" do
+      text = "host all @loop 10.0.0.0/8 md5\n"
+
+      [diagnostic] =
+        Postern.Diagnostics.for_document("file:///pg/pg_hba.conf", text, %{
+          "pg" => 18,
+          reader: files(text)
+        })
+
+      assert diagnostic.message ==
+               ~s(could not open file "#{Path.expand("/pg/loop")}": maximum nesting depth exceeded)
+    end
+
+    test "links the field to the file" do
+      text = "host all @admins 10.0.0.0/8 md5\nhost @nobody all 10.0.0.0/8 md5\n"
+
+      target = Postern.FileKind.path_to_uri(Path.expand("/pg/admins"))
+
+      assert [%{target: ^target, range: %{start: %{line: 0, character: 9}}}] =
+               Postern.Features.document_links("file:///pg/pg_hba.conf", text, %{
+                 reader: files(text)
+               })
+    end
+  end
 end
