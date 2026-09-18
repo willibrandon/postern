@@ -20,8 +20,11 @@ defmodule Postern.Server do
   alias GenLSP.Notifications.TextDocumentDidChange
   alias GenLSP.Notifications.TextDocumentDidClose
   alias GenLSP.Notifications.TextDocumentDidOpen
+  alias GenLSP.Notifications.TextDocumentDidSave
   alias GenLSP.Notifications.TextDocumentPublishDiagnostics
   alias GenLSP.Notifications.WindowShowMessage
+  alias GenLSP.Notifications.WorkspaceDidChangeWatchedFiles
+  alias GenLSP.Requests.ClientRegisterCapability
   alias GenLSP.Requests.Initialize
   alias GenLSP.Requests.Shutdown
   alias GenLSP.Requests.TextDocumentCodeAction
@@ -36,11 +39,15 @@ defmodule Postern.Server do
   alias GenLSP.Requests.TextDocumentRename
   alias GenLSP.Requests.WorkspaceExecuteCommand
   alias GenLSP.Structures.CompletionOptions
+  alias GenLSP.Structures.DidChangeWatchedFilesRegistrationOptions
   alias GenLSP.Structures.DocumentLinkOptions
   alias GenLSP.Structures.ExecuteCommandOptions
+  alias GenLSP.Structures.FileSystemWatcher
   alias GenLSP.Structures.InitializeParams
   alias GenLSP.Structures.InitializeResult
   alias GenLSP.Structures.PublishDiagnosticsParams
+  alias GenLSP.Structures.Registration
+  alias GenLSP.Structures.RegistrationParams
   alias GenLSP.Structures.RenameOptions
   alias GenLSP.Structures.SaveOptions
   alias GenLSP.Structures.ServerCapabilities
@@ -89,7 +96,8 @@ defmodule Postern.Server do
        test_mode: test_mode,
        initialization_options: nil,
        root_uri: nil,
-       live_oracle: live_oracle
+       live_oracle: live_oracle,
+       watch_files: false
      )}
   end
 
@@ -112,7 +120,8 @@ defmodule Postern.Server do
       assign(lsp,
         initialization_options: initialization_options,
         root_uri: root_uri,
-        live_oracle: live_oracle
+        live_oracle: live_oracle,
+        watch_files: watches_files?(params)
       )
 
     GenLSP.info(
@@ -372,6 +381,7 @@ defmodule Postern.Server do
   @impl true
   def handle_notification(%Initialized{}, lsp) do
     GenLSP.info(lsp, "[initialized] Postern language server initialized.")
+    if current_assigns(lsp).watch_files, do: register_watchers(lsp)
     {:noreply, lsp}
   end
 
@@ -425,9 +435,72 @@ defmodule Postern.Server do
     {:noreply, lsp}
   end
 
-  # Gracefully ignore other notifications (didSave, etc.)
+  # A save may be what the server reads next, so the document and the ones
+  # that share a tree with it are checked again, with a fresh snapshot.
+  def handle_notification(%TextDocumentDidSave{params: params}, lsp) do
+    uri = params.text_document.uri
+
+    case DocumentStore.get(lsp, uri) do
+      %{text: text, version: version, kind: kind} ->
+        publish_diagnostics(lsp, uri, text, version)
+        publish_related(lsp, uri, kind)
+
+      nil ->
+        :ok
+    end
+
+    {:noreply, lsp}
+  end
+
+  # A file the checks read from the disk changed: an include, the auto file
+  # ALTER SYSTEM writes, or the file beside the open one. Every open
+  # document is checked again, since any of them may read it.
+  def handle_notification(%WorkspaceDidChangeWatchedFiles{}, lsp) do
+    for {uri, document} <- DocumentStore.all(lsp) do
+      publish_diagnostics(lsp, uri, document.text, document.version)
+    end
+
+    {:noreply, lsp}
+  end
+
+  # Gracefully ignore other notifications.
   def handle_notification(_notification, lsp) do
     {:noreply, lsp}
+  end
+
+  # The client is asked to report changes to any .conf file it can see,
+  # which covers the four files, conf.d and most includes. A client that
+  # cannot register watchers said so at initialize and is not asked.
+  defp register_watchers(lsp) do
+    GenLSP.request(
+      lsp,
+      %ClientRegisterCapability{
+        id: "postern.watchers",
+        params: %RegistrationParams{
+          registrations: [
+            %Registration{
+              id: "postern.watched-files",
+              method: "workspace/didChangeWatchedFiles",
+              register_options: %DidChangeWatchedFilesRegistrationOptions{
+                watchers: [%FileSystemWatcher{glob_pattern: "**/*.conf"}]
+              }
+            }
+          ]
+        }
+      },
+      5_000
+    )
+  rescue
+    _error -> :ok
+  catch
+    :exit, _reason -> :ok
+  end
+
+  defp watches_files?(%InitializeParams{capabilities: capabilities}) do
+    case capabilities do
+      %{workspace: %{did_change_watched_files: %{dynamic_registration: true}}} -> true
+      _other -> false
+    end
   end
 
   defp publish_diagnostics(lsp, uri, text, version) do

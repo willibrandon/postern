@@ -117,6 +117,105 @@ defmodule Postern.ServerTest do
     end
   end
 
+  describe "files on the disk" do
+    test "a client that can watch files is asked to report changes to any .conf file", %{
+      client: client
+    } do
+      request(client, %{
+        "jsonrpc" => "2.0",
+        "id" => 400,
+        "method" => "initialize",
+        "params" => %{
+          "processId" => nil,
+          "rootUri" => nil,
+          "capabilities" => %{
+            "workspace" => %{"didChangeWatchedFiles" => %{"dynamicRegistration" => true}}
+          }
+        }
+      })
+
+      assert_result(400, _result)
+      notify(client, %{"jsonrpc" => "2.0", "method" => "initialized", "params" => %{}})
+
+      assert_request(client, "client/registerCapability", fn params ->
+        assert [
+                 %{
+                   "method" => "workspace/didChangeWatchedFiles",
+                   "registerOptions" => %{"watchers" => [%{"globPattern" => "**/*.conf"}]}
+                 }
+               ] =
+                 params["registrations"]
+
+        nil
+      end)
+    end
+
+    test "a client that cannot watch files is not asked", %{client: client} do
+      request(client, %{
+        "jsonrpc" => "2.0",
+        "id" => 401,
+        "method" => "initialize",
+        "params" => %{"processId" => nil, "rootUri" => nil, "capabilities" => %{}}
+      })
+
+      assert_result(401, _result)
+      notify(client, %{"jsonrpc" => "2.0", "method" => "initialized", "params" => %{}})
+      refute_receive %{"method" => "client/registerCapability"}, 200
+    end
+
+    test "a save and a change to a watched file check the open documents again", %{client: client} do
+      request(client, %{
+        "jsonrpc" => "2.0",
+        "id" => 402,
+        "method" => "initialize",
+        "params" => %{"processId" => nil, "rootUri" => nil, "capabilities" => %{}}
+      })
+
+      assert_result(402, _result)
+      uri = "file:///etc/postgresql.conf"
+
+      notify(client, %{
+        "jsonrpc" => "2.0",
+        "method" => "textDocument/didOpen",
+        "params" => %{
+          "textDocument" => %{
+            "uri" => uri,
+            "languageId" => "postgresql-conf",
+            "version" => 1,
+            "text" => "shared_buffrs = 1\n"
+          }
+        }
+      })
+
+      assert_notification("textDocument/publishDiagnostics", %{
+        "uri" => ^uri,
+        "diagnostics" => [_one]
+      })
+
+      notify(client, %{
+        "jsonrpc" => "2.0",
+        "method" => "textDocument/didSave",
+        "params" => %{"textDocument" => %{"uri" => uri}}
+      })
+
+      assert_notification("textDocument/publishDiagnostics", %{
+        "uri" => ^uri,
+        "diagnostics" => [_one]
+      })
+
+      notify(client, %{
+        "jsonrpc" => "2.0",
+        "method" => "workspace/didChangeWatchedFiles",
+        "params" => %{"changes" => [%{"uri" => "file:///etc/conf.d/10-memory.conf", "type" => 2}]}
+      })
+
+      assert_notification("textDocument/publishDiagnostics", %{
+        "uri" => ^uri,
+        "diagnostics" => [_one]
+      })
+    end
+  end
+
   describe "workspace/executeCommand" do
     setup %{client: client} do
       request(client, %{

@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+- A change on the disk to a file a check reads, an include, the `postgresql.auto.conf` that
+  ALTER SYSTEM rewrites, or the file beside the open one, checks the open documents again:
+  the server asks a client that can watch files to report changes to any `.conf` file, and a
+  save checks the saved document and the ones that share its tree, with a fresh look at the
+  server when one is connected.
 - Quick fixes for what the checks already know: the closest catalog name or the name that
   took a setting's place, a unit spelled the way the server takes it, `128MB` for `128mb`, a
   value quoted where the scanner refused it bare, and the line an override or an internal
