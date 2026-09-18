@@ -29,7 +29,9 @@ log would show after a reload, hint included.
   the server does and reads `postgresql.auto.conf` last, so a value `ALTER SYSTEM` or a
   `conf.d` file overrides is marked where it stands, and an include the server could not open
   is an error. Hover says where the value that counts is set, go to definition goes there, and
-  an include line links to its file.
+  an include line links to its file. A `map=`
+  option and the map in `pg_ident.conf` are one name: definition, references and rename cross
+  the two files.
 - `pg_hba.conf` rules that an earlier rule shadows, options that do not apply to the method, a
   file of names given with `@` that the server could not open, a regular expression its engine
   refuses, and ident maps that are missing or unused.

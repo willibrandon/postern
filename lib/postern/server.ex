@@ -29,6 +29,9 @@ defmodule Postern.Server do
   alias GenLSP.Requests.TextDocumentDocumentLink
   alias GenLSP.Requests.TextDocumentHover
   alias GenLSP.Requests.TextDocumentInlayHint
+  alias GenLSP.Requests.TextDocumentPrepareRename
+  alias GenLSP.Requests.TextDocumentReferences
+  alias GenLSP.Requests.TextDocumentRename
   alias GenLSP.Requests.WorkspaceExecuteCommand
   alias GenLSP.Structures.CompletionOptions
   alias GenLSP.Structures.DocumentLinkOptions
@@ -36,6 +39,7 @@ defmodule Postern.Server do
   alias GenLSP.Structures.InitializeParams
   alias GenLSP.Structures.InitializeResult
   alias GenLSP.Structures.PublishDiagnosticsParams
+  alias GenLSP.Structures.RenameOptions
   alias GenLSP.Structures.SaveOptions
   alias GenLSP.Structures.ServerCapabilities
   alias GenLSP.Structures.TextDocumentSyncOptions
@@ -123,6 +127,8 @@ defmodule Postern.Server do
         hover_provider: true,
         completion_provider: %CompletionOptions{trigger_characters: [".", "="]},
         definition_provider: true,
+        references_provider: true,
+        rename_provider: %RenameOptions{prepare_provider: true},
         document_link_provider: %DocumentLinkOptions{resolve_provider: false},
         inlay_hint_provider: true,
         code_action_provider: true,
@@ -165,7 +171,62 @@ defmodule Postern.Server do
             params.text_document.uri,
             text,
             params.position,
-            Map.put(Map.new(current_assigns(lsp).initialization_options || %{}), :kind, kind)
+            Map.put(feature_options(lsp), :kind, kind)
+          )
+
+        nil ->
+          nil
+      end
+
+    {:reply, reply, lsp}
+  end
+
+  def handle_request(%TextDocumentReferences{params: params}, lsp) do
+    reply =
+      case DocumentStore.get(lsp, params.text_document.uri) do
+        %{text: text, kind: kind} ->
+          Features.references(
+            params.text_document.uri,
+            text,
+            params.position,
+            Map.put(feature_options(lsp), :kind, kind)
+          )
+
+        nil ->
+          []
+      end
+
+    {:reply, reply, lsp}
+  end
+
+  def handle_request(%TextDocumentPrepareRename{params: params}, lsp) do
+    reply =
+      case DocumentStore.get(lsp, params.text_document.uri) do
+        %{text: text, kind: kind} ->
+          Features.prepare_rename(
+            params.text_document.uri,
+            text,
+            params.position,
+            Map.put(feature_options(lsp), :kind, kind)
+          )
+
+        nil ->
+          nil
+      end
+
+    {:reply, reply, lsp}
+  end
+
+  def handle_request(%TextDocumentRename{params: params}, lsp) do
+    reply =
+      case DocumentStore.get(lsp, params.text_document.uri) do
+        %{text: text, kind: kind} ->
+          Features.rename(
+            params.text_document.uri,
+            text,
+            params.position,
+            params.new_name,
+            Map.put(feature_options(lsp), :kind, kind)
           )
 
         nil ->

@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+- `map=` on a pg_hba.conf rule and the map in pg_ident.conf are one name to the editor now: go
+  to definition goes from the option to the map's first line and from a map to it, find
+  references lists the lines that define the map and the rules that name it across both
+  trees, rename changes every one of them, and completion offers the map names after `map=`
+  and on a new pg_ident.conf line, a map named in pg_hba.conf but not yet defined among them.
+  With a live connection the third field of pg_ident.conf completes to the server's roles.
 - Hover on pg_hba.conf and pg_ident.conf, with the manual's own words for the target
   version: what a connection type matches, what the database, user and address fields take,
   what a method does and under which section the manual treats it, and what an option means

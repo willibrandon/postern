@@ -2,6 +2,7 @@ defmodule Postern.FeaturesTest do
   use ExUnit.Case, async: true
 
   alias GenLSP.Structures.Position
+  alias GenLSP.Structures.Range
   alias Postern.Features
 
   test "hover on a setting reads generated catalog documentation" do
@@ -136,6 +137,158 @@ defmodule Postern.FeaturesTest do
 
     assert %{label: "pg_stat_statements.max", detail: "pg_stat_statements setting"} =
              Enum.find(items, &(&1.label == "pg_stat_statements.max"))
+  end
+
+  describe "between map= and the map in pg_ident.conf" do
+    @hba "host all all 10.0.0.0/8 cert map=ops\nhost all all 10.0.0.0/8 peer map=\"ops\" clientcert=verify-full\nhost all all 10.0.0.0/8 peer map=missing\n"
+    @ident "ops alice alice\nops bob bob\nother carol carol\n"
+
+    defp map_files,
+      do: Postern.Files.in_memory(%{"/pg/pg_hba.conf" => @hba, "/pg/pg_ident.conf" => @ident})
+
+    defp map_options, do: %{"pg" => 18, reader: map_files()}
+    defp hba_uri, do: "file:///pg/pg_hba.conf"
+    defp ident_uri, do: Postern.FileKind.path_to_uri(Path.expand("/pg/pg_ident.conf"))
+
+    test "definition goes from map= to the first line of the map, and from a map to its first line" do
+      ident = ident_uri()
+
+      assert %{
+               uri: ^ident,
+               range: %{start: %{line: 0, character: 0}, end: %{line: 0, character: 3}}
+             } =
+               Features.definition(
+                 hba_uri(),
+                 @hba,
+                 %Position{line: 1, character: 35},
+                 map_options()
+               )
+
+      assert %{uri: ^ident, range: %{start: %{line: 0, character: 0}}} =
+               Features.definition(
+                 "file:///pg/pg_ident.conf",
+                 @ident,
+                 %Position{line: 1, character: 1},
+                 map_options()
+               )
+
+      assert Features.definition(
+               hba_uri(),
+               @hba,
+               %Position{line: 2, character: 35},
+               map_options()
+             ) == nil
+
+      assert Features.definition(hba_uri(), @hba, %Position{line: 0, character: 3}, map_options()) ==
+               nil
+    end
+
+    test "references are the definitions and then the uses, from either file" do
+      from_hba =
+        Features.references(hba_uri(), @hba, %Position{line: 0, character: 36}, map_options())
+
+      from_ident =
+        Features.references(
+          "file:///pg/pg_ident.conf",
+          @ident,
+          %Position{line: 1, character: 2},
+          map_options()
+        )
+
+      assert from_hba == from_ident
+
+      assert Enum.map(
+               from_hba,
+               &{Path.basename(&1.uri), &1.range.start.line, &1.range.start.character,
+                &1.range.end.character}
+             ) ==
+               [
+                 {"pg_ident.conf", 0, 0, 3},
+                 {"pg_ident.conf", 1, 0, 3},
+                 {"pg_hba.conf", 0, 33, 36},
+                 {"pg_hba.conf", 1, 34, 37}
+               ]
+    end
+
+    test "rename edits every place the name stands, in both files" do
+      assert %Range{start: %{line: 0, character: 33}, end: %{character: 36}} =
+               Features.prepare_rename(
+                 hba_uri(),
+                 @hba,
+                 %Position{line: 0, character: 34},
+                 map_options()
+               )
+
+      assert Features.prepare_rename(
+               hba_uri(),
+               @hba,
+               %Position{line: 0, character: 3},
+               map_options()
+             ) == nil
+
+      %{changes: changes} =
+        Features.rename(
+          hba_uri(),
+          @hba,
+          %Position{line: 0, character: 34},
+          "admins",
+          map_options()
+        )
+
+      assert Map.keys(changes) |> Enum.map(&Path.basename/1) |> Enum.sort() == [
+               "pg_hba.conf",
+               "pg_ident.conf"
+             ]
+
+      assert Enum.all?(Map.values(changes), fn edits ->
+               Enum.all?(edits, &(&1.new_text == "admins"))
+             end)
+
+      assert changes |> Map.values() |> List.flatten() |> length() == 4
+
+      assert Features.rename(
+               hba_uri(),
+               @hba,
+               %Position{line: 0, character: 34},
+               "two words",
+               map_options()
+             ) == nil
+    end
+
+    test "completion offers the map names after map= and on a new pg_ident.conf line" do
+      %{items: items} =
+        Features.completion(
+          hba_uri(),
+          "host all all 10.0.0.0/8 peer map=o\n",
+          %Position{line: 0, character: 34},
+          map_options()
+        )
+
+      assert Enum.map(items, & &1.label) == ["ops", "other"]
+
+      # A map named in pg_hba.conf but not yet defined is offered where it would be.
+      %{items: items} =
+        Features.completion(
+          "file:///pg/pg_ident.conf",
+          "mi\n",
+          %Position{line: 0, character: 2},
+          map_options()
+        )
+
+      assert Enum.map(items, & &1.label) == ["missing"]
+
+      %{items: items} =
+        Features.completion(
+          "file:///pg/pg_ident.conf",
+          "ops alice al\n",
+          %Position{line: 0, character: 12},
+          Map.put(map_options(), :live_snapshot, %{
+            roles: [%{"rolname" => "alice"}, %{"rolname" => "bob"}]
+          })
+        )
+
+      assert Enum.map(items, & &1.label) == ["alice"]
+    end
   end
 
   describe "hover on pg_hba.conf and pg_ident.conf" do

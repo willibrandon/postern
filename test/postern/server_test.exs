@@ -46,7 +46,9 @@ defmodule Postern.ServerTest do
             "openClose" => true,
             "change" => 1,
             "save" => %{"includeText" => true}
-          }
+          },
+          "referencesProvider" => true,
+          "renameProvider" => %{"prepareProvider" => true}
         },
         "serverInfo" => %{"name" => "postern", "version" => _}
       })

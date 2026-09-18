@@ -77,6 +77,16 @@ defmodule Postern.Diagnostics do
     )
   end
 
+  @doc """
+  The document's tree and, for the two authentication files, the other
+  one's tree beside the root: the pg_ident.conf tree for a pg_hba.conf
+  document and the other way round. Without a `:reader` there is nothing
+  to look at, and both are `nil`.
+  """
+  @spec related_trees(atom(), Path.t(), String.t(), map() | keyword()) ::
+          {map() | nil, map() | nil}
+  def related_trees(kind, path, text, options), do: trees(kind, path, text, options)
+
   # The document's tree, and for the two authentication files the other one's
   # tree beside the root. Without a reader there is nothing to look at.
   defp trees(kind, path, text, options) do

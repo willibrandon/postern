@@ -23,8 +23,10 @@ defmodule Postern.Features do
   alias GenLSP.Structures.Position
   alias GenLSP.Structures.Range
   alias GenLSP.Structures.TextEdit
+  alias GenLSP.Structures.WorkspaceEdit
   alias Postern.Catalog
   alias Postern.ConfigTree
+  alias Postern.Diagnostics
   alias Postern.Docs
   alias Postern.FileKind
   alias Postern.Files
@@ -158,19 +160,180 @@ defmodule Postern.Features do
 
   @doc """
   Where the value that counts for the setting under the cursor is set, when
-  that is another line of the tree, or `nil`.
+  that is another line of the tree; from a `map=` option or a map name, the
+  first line of the map in pg_ident.conf; or `nil`.
   """
   @spec definition(String.t(), String.t(), Position.t(), map() | keyword()) :: Location.t() | nil
   def definition(uri, text, position, options \\ %{}) do
-    with :postgresql_conf <- option(options, :kind) || FileKind.detect(uri),
-         {:ok, entries} = PostgresqlConf.parse(text),
-         %{type: :assignment} = entry <- entry_at(entries, position),
+    case option(options, :kind) || FileKind.detect(uri) do
+      :postgresql_conf ->
+        setting_definition(uri, text, position, options)
+
+      kind when kind in [:pg_hba_conf, :pg_ident_conf] ->
+        map_definition(uri, text, position, options)
+
+      _ ->
+        nil
+    end
+  end
+
+  defp setting_definition(uri, text, position, options) do
+    {:ok, entries} = PostgresqlConf.parse(text)
+
+    with %{type: :assignment} = entry <- entry_at(entries, position),
          %{path: path, entry: winner} <- elsewhere(uri, entry, options) do
       %Location{uri: FileKind.path_to_uri(path), range: span_to_range(winner.name_span)}
     else
       _ -> nil
     end
   end
+
+  defp map_definition(uri, text, position, options) do
+    with {:ok, name, _span} <- map_at(uri, text, position, options),
+         [location | _rest] <- map_definitions(uri, text, name, options) do
+      location
+    else
+      _ -> nil
+    end
+  end
+
+  @doc """
+  Every place a map name stands: the lines that define it in pg_ident.conf
+  first, then the rules that name it with `map=` in pg_hba.conf, across both
+  trees.
+  """
+  @spec references(String.t(), String.t(), Position.t(), map() | keyword()) :: [Location.t()]
+  def references(uri, text, position, options \\ %{}) do
+    case map_at(uri, text, position, options) do
+      {:ok, name, _span} ->
+        map_definitions(uri, text, name, options) ++ map_uses(uri, text, name, options)
+
+      _ ->
+        []
+    end
+  end
+
+  @doc "The range of the map name under the cursor, when there is one to rename."
+  @spec prepare_rename(String.t(), String.t(), Position.t(), map() | keyword()) :: Range.t() | nil
+  def prepare_rename(uri, text, position, options \\ %{}) do
+    case map_at(uri, text, position, options) do
+      {:ok, _name, span} -> span_to_range(span)
+      _ -> nil
+    end
+  end
+
+  @doc """
+  The edits that rename the map under the cursor everywhere it stands, or
+  `nil` for a name the files could not carry as one token.
+  """
+  @spec rename(String.t(), String.t(), Position.t(), String.t(), map() | keyword()) ::
+          WorkspaceEdit.t() | nil
+  def rename(uri, text, position, new_name, options \\ %{}) do
+    with true <- Regex.match?(~r/^[^\s,"#]+$/, new_name),
+         [_location | _rest] = locations <- references(uri, text, position, options) do
+      changes =
+        locations
+        |> Enum.group_by(& &1.uri, &%TextEdit{range: &1.range, new_text: new_name})
+        |> Map.new()
+
+      %WorkspaceEdit{changes: changes}
+    else
+      _ -> nil
+    end
+  end
+
+  # The map name under the cursor: the value of a map= option on a
+  # pg_hba.conf rule, or the first field of a pg_ident.conf mapping.
+  defp map_at(uri, text, position, options) do
+    version = Postern.PostgresqlConfDiagnostics.target_version(text, options, Catalog.versions())
+    continuations = [continuations: PgHbaOptions.continuations?(version)]
+
+    case option(options, :kind) || FileKind.detect(uri) do
+      :pg_hba_conf -> hba_map_at(PgHba.parse(text, continuations), position)
+      :pg_ident_conf -> ident_map_at(PgIdent.parse(text, continuations), position)
+      _kind -> :none
+    end
+  end
+
+  defp hba_map_at({:ok, entries}, position) do
+    with %{type: :rule, tokens: tokens} <-
+           Enum.find(entries, &(&1.type == :rule and covers?(&1, position))),
+         %{} = token <- Enum.find(tokens, &(map_option?(&1) and within?(&1.span, position))) do
+      {:ok, map_value(token), map_value_span(token)}
+    else
+      _ -> :none
+    end
+  end
+
+  defp ident_map_at({:ok, entries}, position) do
+    case Enum.find(entries, &(&1.type == :mapping and within?(&1.map_span, position))) do
+      %{map: name, map_span: span} -> {:ok, name, span}
+      nil -> :none
+    end
+  end
+
+  defp map_option?(%{raw: raw}),
+    do: String.starts_with?(raw, "map=") or String.starts_with?(raw, ~s("map=))
+
+  defp map_value(%{value: value}),
+    do: value |> String.split("=", parts: 2) |> List.last() |> String.trim("\"")
+
+  # The value's own span inside the map=value token, quotes left out.
+  defp map_value_span(%{raw: raw, span: span}) do
+    {prefix, suffix} =
+      cond do
+        String.starts_with?(raw, ~s(map=")) -> {5, 1}
+        String.starts_with?(raw, ~s("map=)) -> {5, 1}
+        true -> {4, 0}
+      end
+
+    %{span | col: span.col + prefix, end_col: span.end_col - suffix}
+  end
+
+  defp map_definitions(uri, text, name, options) do
+    {ident_tree, hba_tree} = map_trees(uri, text, options)
+    _ = hba_tree
+
+    for %{path: path, entry: %{type: :mapping, map: ^name, map_span: span}} <- entries(ident_tree),
+        do: %Location{uri: FileKind.path_to_uri(path), range: span_to_range(span)}
+  end
+
+  defp map_uses(uri, text, name, options) do
+    {_ident_tree, hba_tree} = map_trees(uri, text, options)
+
+    for %{path: path, entry: %{type: :rule, tokens: tokens}} <- entries(hba_tree),
+        token <- tokens,
+        map_option?(token) and map_value(token) == name,
+        do: %Location{
+          uri: FileKind.path_to_uri(path),
+          range: span_to_range(map_value_span(token))
+        }
+  end
+
+  # The pg_ident.conf and pg_hba.conf trees, whichever file the document is,
+  # or the document alone when there is no reader to find the other with.
+  defp map_trees(uri, text, options) do
+    kind = option(options, :kind) || FileKind.detect(uri)
+    path = path_of(uri)
+
+    case Diagnostics.related_trees(kind, path, text, options) do
+      {nil, nil} ->
+        version =
+          Postern.PostgresqlConfDiagnostics.target_version(text, options, Catalog.versions())
+
+        {:ok, entries} =
+          ConfigTree.parse(kind, text, continuations: PgHbaOptions.continuations?(version))
+
+        own = %{entries: Enum.map(entries, &%{path: path, entry: &1})}
+        if kind == :pg_ident_conf, do: {own, nil}, else: {nil, own}
+
+      {tree, other} ->
+        if kind == :pg_ident_conf, do: {tree, other}, else: {other, tree}
+    end
+  end
+
+  defp entries(nil), do: []
+  defp entries(%{entries: entries}), do: entries
 
   @doc """
   Links from the include lines to the files they name, and from a pg_hba.conf
@@ -246,11 +409,53 @@ defmodule Postern.Features do
     items =
       case option(options, :kind) || FileKind.detect(uri) do
         :postgresql_conf -> postgresql_completion(text, position, options)
-        :pg_hba_conf -> hba_completion(text, position, options)
+        :pg_hba_conf -> hba_completion(uri, text, position, options)
+        :pg_ident_conf -> ident_completion(uri, text, position, options)
         _ -> []
       end
 
     %CompletionList{is_incomplete: false, items: items}
+  end
+
+  # Every map name the two trees know: the ones pg_ident.conf defines and
+  # the ones pg_hba.conf names, so a map used but not yet defined is offered
+  # where it would be defined.
+  defp map_names(uri, text, options) do
+    {ident_tree, hba_tree} = map_trees(uri, text, options)
+
+    defined = for %{entry: %{type: :mapping, map: name}} <- entries(ident_tree), do: name
+
+    used =
+      for %{entry: %{type: :rule, tokens: tokens}} <- entries(hba_tree),
+          token <- tokens,
+          map_option?(token),
+          do: map_value(token)
+
+    Enum.uniq(defined ++ used)
+  end
+
+  # A map name on a new line, and with a live connection the PostgreSQL user
+  # names in the third field.
+  defp ident_completion(uri, text, position, options) do
+    line = line_at(text, position.line)
+    before = String.slice(line, 0, min(position.character, String.length(line)))
+    prefix = word_prefix(before)
+    fields = String.split(String.trim(before), ~r/\s+/, trim: true)
+
+    complete_fields =
+      if String.ends_with?(before, [" ", "\t"]), do: fields, else: Enum.drop(fields, -1)
+
+    candidates =
+      case length(complete_fields) do
+        0 -> map_names(uri, text, options)
+        2 -> live_values(options).roles
+        _other -> []
+      end
+
+    candidates
+    |> Enum.uniq()
+    |> Enum.filter(&String.starts_with?(String.downcase(&1), String.downcase(prefix)))
+    |> Enum.map(&completion_item(&1, CompletionItemKind.value(), "pg_ident.conf"))
   end
 
   defp postgresql_hover(uri, text, position, options) do
@@ -487,7 +692,7 @@ defmodule Postern.Features do
     |> rem(2) == 1
   end
 
-  defp hba_completion(text, position, options) do
+  defp hba_completion(uri, text, position, options) do
     line = line_at(text, position.line)
     before = String.slice(line, 0, min(position.character, String.length(line)))
     prefix = word_prefix(before)
@@ -497,12 +702,19 @@ defmodule Postern.Features do
       if String.ends_with?(before, [" ", "\t"]), do: fields, else: Enum.drop(fields, -1)
 
     version = Postern.PostgresqlConfDiagnostics.target_version(text, options, Catalog.versions())
-    candidates = hba_candidates(complete_fields, live_values(options), version)
+
+    # After map= the names come from pg_ident.conf rather than the grammar.
+    {candidates, kind} =
+      if Regex.match?(~r/(?:^|\s)"?map=[^\s]*$/, before),
+        do: {map_names(uri, text, options), CompletionItemKind.value()},
+        else:
+          {hba_candidates(complete_fields, live_values(options), version),
+           CompletionItemKind.keyword()}
 
     candidates
     |> Enum.uniq()
     |> Enum.filter(&String.starts_with?(String.downcase(&1), String.downcase(prefix)))
-    |> Enum.map(&completion_item(&1, CompletionItemKind.keyword(), "pg_hba.conf"))
+    |> Enum.map(&completion_item(&1, kind, "pg_hba.conf"))
   end
 
   defp hba_candidates([], _live, _version), do: @connection_types
