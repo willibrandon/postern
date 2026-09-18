@@ -11,6 +11,9 @@ shows the exact message a reload would produce, before the reload.
 
 ## What it reports
 
+The offline checks use the words the server logs, so a message in the editor is the one the
+log would show after a reload, hint included.
+
 - Unknown or misspelled settings, with the closest catalog name. A setting with a dot in its
   name belongs to a module, and is taken as the server takes it until that module checks it.
 - Values that do not fit the setting's type, unit, range or enum.

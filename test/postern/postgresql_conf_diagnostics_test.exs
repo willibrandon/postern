@@ -15,9 +15,11 @@ defmodule Postern.PostgresqlConfDiagnosticsTest do
 
     messages = Enum.map(diagnostics, & &1.message)
 
-    assert Enum.any?(messages, &String.contains?(&1, "did you mean \"shared_buffers\""))
+    assert ~s(unrecognized configuration parameter "shared_buffrs"\nPerhaps you meant "shared_buffers".) in messages
+
     assert ~s(parameter "fsync" requires a Boolean value) in messages
-    assert Enum.any?(messages, &String.contains?(&1, "not one of"))
+
+    assert ~s(invalid value for parameter "password_encryption": "plaintext"\nAvailable values: md5, scram-sha-256.) in messages
 
     assert ~s|0 is outside the valid range for parameter "max_connections" (1 .. 262143)| in messages
 
@@ -54,10 +56,26 @@ defmodule Postern.PostgresqlConfDiagnosticsTest do
     assert diagnostic.severity == 1
 
     assert diagnostic.message ==
-             "unknown setting \"shared_buffrs\"; did you mean \"shared_buffers\"?"
+             ~s(unrecognized configuration parameter "shared_buffrs"\nPerhaps you meant "shared_buffers".)
 
     assert diagnostic.range.start.line == 0
     assert diagnostic.range.start.character == 0
+
+    [diagnostic] =
+      Diagnostics.for_document("file:///tmp/postgresql.conf", "zzzz = 1\n", %{"pg" => 16})
+
+    assert diagnostic.message == ~s(unrecognized configuration parameter "zzzz")
+  end
+
+  test "a syntax error is the scanner's, on the token it stopped at" do
+    [diagnostic] =
+      Diagnostics.for_document("file:///tmp/postgresql.conf", "work_mem = 1.5GB\n", %{
+        "pg" => 18
+      })
+
+    assert diagnostic.message == ~s(syntax error near token "GB")
+    assert diagnostic.range.start.character == 14
+    assert diagnostic.range.end.character == 16
   end
 
   test "an enum value with a space in it is one of the values" do
@@ -72,7 +90,8 @@ defmodule Postern.PostgresqlConfDiagnosticsTest do
       )
 
     assert diagnostic.message ==
-             ~s(value "read commited" is not one of: serializable, repeatable read, read committed, read uncommitted)
+             ~s(invalid value for parameter "default_transaction_isolation": "read commited"\n) <>
+               "Available values: serializable, repeatable read, read committed, read uncommitted."
   end
 
   test "a malformed value is one error on its value span" do

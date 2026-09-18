@@ -85,12 +85,18 @@ defmodule Postern.CLITest do
     # every path takes, which on Windows is not the form the test joined.
     canonical = Path.expand(directory)
     assert output =~ ~s(postgresql.conf:3:9: error: could not open file "#{canonical}/gone.conf")
-    assert output =~ ~s(10-memory.conf:2:1: error: unknown setting "shared_buffrs")
+
+    assert output =~
+             ~s(10-memory.conf:2:1: error: unrecognized configuration parameter "shared_buffrs"\n) <>
+               ~s(  Perhaps you meant "shared_buffers".\n)
 
     # The included file on its own is checked through its root, and once
     # when it is given with the root.
     output = capture_io(fn -> assert CLI.run(["check", included]) == 1 end)
-    assert output =~ ~s(10-memory.conf:2:1: error: unknown setting "shared_buffrs")
+
+    assert output =~
+             ~s(10-memory.conf:2:1: error: unrecognized configuration parameter "shared_buffrs"\n) <>
+               ~s(  Perhaps you meant "shared_buffers".\n)
 
     output = capture_io(fn -> assert CLI.run(["check", root, included]) == 1 end)
     assert length(String.split(output, "shared_buffrs")) == 2

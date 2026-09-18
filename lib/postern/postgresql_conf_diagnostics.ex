@@ -149,6 +149,8 @@ defmodule Postern.PostgresqlConfDiagnostics do
     end
   end
 
+  # The server's message, and below it the closest catalog name, phrased the
+  # way the server phrases a hint of its own.
   defp unknown_setting_diagnostic(entry, name, versions) do
     suggestions =
       versions
@@ -157,13 +159,12 @@ defmodule Postern.PostgresqlConfDiagnostics do
       |> Enum.map(&{jaro(String.downcase(name), String.downcase(&1)), &1})
       |> Enum.sort_by(fn {score, candidate} -> {-score, candidate} end)
 
+    message = ~s(unrecognized configuration parameter "#{name}")
+
     message =
       case Enum.find(suggestions, fn {score, _candidate} -> score >= 0.80 end) do
-        {_score, candidate} ->
-          "unknown setting #{inspect(name)}; did you mean #{inspect(candidate)}?"
-
-        nil ->
-          "unknown setting #{inspect(name)}"
+        {_score, candidate} -> message <> ~s(\nPerhaps you meant "#{candidate}".)
+        nil -> message
       end
 
     [diagnostic(entry.name_span, @error, message)]
@@ -255,13 +256,15 @@ defmodule Postern.PostgresqlConfDiagnostics do
     end
   end
 
+  # config_enum_lookup_by_name compares without regard to case, and the hint
+  # lists the values the way config_enum_get_options prints them.
   defp validate_enum(value, setting) do
     enum_values = Catalog.array_literal(setting["enumvals"])
 
-    if value in enum_values do
+    if String.downcase(value) in Enum.map(enum_values, &String.downcase/1) do
       :ok
     else
-      {:error, "value #{inspect(value)} is not one of: #{Enum.join(enum_values, ", ")}"}
+      {:error, invalid(setting, value, "Available values: #{Enum.join(enum_values, ", ")}.")}
     end
   end
 

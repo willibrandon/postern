@@ -585,7 +585,7 @@ defmodule Postern.ServerTest do
         "diagnostics" => [%{"message" => misspelled}]
       })
 
-      assert misspelled =~ ~s(did you mean "shared_buffers")
+      assert misspelled =~ ~s(Perhaps you meant "shared_buffers")
       assert server_assigns(server)[:documents][included].kind == :postgresql_conf
 
       notify(client, %{

@@ -54,8 +54,8 @@ suite("Postern", () => {
       const found = vscode.languages.getDiagnostics(uri).filter((d) => d.source === "postern");
       return found.length > 0 ? found : undefined;
     });
-    const unknown = diagnostics.find((d) => d.message.includes("did you mean"));
-    assert.ok(unknown, `expected a did-you-mean diagnostic, got ${JSON.stringify(diagnostics)}`);
+    const unknown = diagnostics.find((d) => d.message.includes("Perhaps you meant"));
+    assert.ok(unknown, `expected a suggestion, got ${JSON.stringify(diagnostics)}`);
     assert.equal(unknown.range.start.line, 3);
   });
 
@@ -77,7 +77,7 @@ suite("Postern", () => {
       return found.length > 0 ? found : undefined;
     });
     const unknown = diagnostics.find((d) => d.message.includes("shared_buffers"));
-    assert.ok(unknown, `expected a did-you-mean diagnostic, got ${JSON.stringify(diagnostics)}`);
+    assert.ok(unknown, `expected a suggestion, got ${JSON.stringify(diagnostics)}`);
     assert.equal(unknown.range.start.line, 1);
   });
 

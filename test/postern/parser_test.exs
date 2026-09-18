@@ -52,8 +52,76 @@ defmodule Postern.ParserTest do
     test "reports malformed assignments at the source line" do
       assert {:ok, entries} = PostgresqlConf.parse("port =\n")
       assert [%{type: :error} = error] = Enum.filter(entries, &(&1.type == :error))
+      assert error.message == "syntax error near end of line"
       assert error.span.line == 1
       assert error.span.col == 1
+    end
+
+    # What the scanner in guc-file.l makes of each line, checked through a
+    # reload on 18: the value it keeps, or the token it stops at.
+    @lines [
+      {"work_mem = 4MB", {:assignment, "work_mem", "4MB"}},
+      {"work_mem=4MB", {:assignment, "work_mem", "4MB"}},
+      {"work_mem 4MB", {:assignment, "work_mem", "4MB"}},
+      {"port = 5432abc", {:assignment, "port", "5432abc"}},
+      {"work_mem = 1.5e3", {:assignment, "work_mem", "1.5e3"}},
+      {"work_mem = -1", {:assignment, "work_mem", "-1"}},
+      {"work_mem = 0x80", {:assignment, "work_mem", "0x80"}},
+      {"x.y = on", {:assignment, "x.y", "on"}},
+      {"log_directory = log", {:assignment, "log_directory", "log"}},
+      {"log_directory = 'pg_log' # where", {:assignment, "log_directory", "pg_log"}},
+      {"application_name = 'a # b'", {:assignment, "application_name", "a # b"}},
+      {"log_line_prefix = 'a\\tb\\'\\101'", {:assignment, "log_line_prefix", "a\tb'A"}},
+      {"search_path = 'it''s'", {:assignment, "search_path", "it's"}},
+      {"INCLUDE 'x.conf'", {:include, "include", "x.conf"}},
+      {"include_dir conf.d", ~s(syntax error near token "conf.d")},
+      {"include_dir 'conf.d'", {:include, "include_dir", "conf.d"}},
+      {"log_directory = pg.log", ~s(syntax error near token "pg.log")},
+      {"log_directory = a.b.c", {:assignment, "log_directory", "a.b.c"}},
+      {"a.b.c = 1", ~s(syntax error near token "a.b.c")},
+      {"a..b = 1", ~s(syntax error near token "a..b")},
+      {"a. = 1", ~s(syntax error near token "a.")},
+      {"log_directory = /var/log", ~s(syntax error near token "/")},
+      {"listen_addresses = *", ~s(syntax error near token "*")},
+      {"search_path = \"$user\", public", ~s(syntax error near token "\"")},
+      {"work_mem = 'unterminated", ~s(syntax error near token "'")},
+      {"work_mem = 4MB extra", ~s(syntax error near token "extra")},
+      {"work_mem = 64 MB", ~s(syntax error near token "MB")},
+      {"work_mem = 1.5GB", ~s(syntax error near token "GB")},
+      {"work_mem = .5MB", ~s(syntax error near token "MB")},
+      {"temp_buffers = 1e3", ~s(syntax error near token "3")},
+      {"= 5", ~s(syntax error near token "=")},
+      {"port", "syntax error near end of line"},
+      {"port =", "syntax error near end of line"}
+    ]
+
+    for {line, expected} <- @lines do
+      test "scans #{line}" do
+        {:ok, [entry]} = PostgresqlConf.parse(unquote(line))
+
+        case unquote(Macro.escape(expected)) do
+          {:assignment, name, value} ->
+            assert entry.type == :assignment
+            assert {entry.name, entry.value} == {name, value}
+
+          {:include, directive, file} ->
+            assert entry.type == :include
+            assert {entry.directive, entry.file} == {directive, file}
+
+          message ->
+            assert entry.type == :error
+            assert entry.message == message
+        end
+      end
+    end
+
+    test "a syntax error is reported on the token, in the columns the editor counts" do
+      {:ok, [entry]} = PostgresqlConf.parse("work_mem = 4MB # ünits")
+      assert entry.type == :assignment
+
+      {:ok, [error]} = PostgresqlConf.parse("log_line_prefix = 'ü' extra")
+      assert error.type == :error
+      assert error.span == %{line: 1, col: 23, end_line: 1, end_col: 28}
     end
   end
 

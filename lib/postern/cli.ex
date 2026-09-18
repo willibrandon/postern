@@ -133,13 +133,18 @@ defmodule Postern.CLI do
     Enum.each(results, fn result ->
       if result[:error], do: print_error(result.error)
 
+      # A message's first line is the server's message, and any line after it
+      # is its hint or detail, printed indented below the way psql prints them.
       Enum.each(result.diagnostics, fn diagnostic ->
         range = diagnostic.range
         severity = severity_name(diagnostic.severity)
+        [message | more] = String.split(diagnostic.message, "\n")
 
         IO.puts(
-          "#{result.file}:#{range.start.line + 1}:#{range.start.character + 1}: #{severity}: #{diagnostic.message}"
+          "#{result.file}:#{range.start.line + 1}:#{range.start.character + 1}: #{severity}: #{message}"
         )
+
+        Enum.each(more, &IO.puts("  " <> &1))
       end)
     end)
   end

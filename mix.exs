@@ -23,7 +23,6 @@ defmodule Postern.MixProject do
   defp deps do
     [
       {:gen_lsp, "~> 0.11.3"},
-      {:nimble_parsec, "~> 1.4"},
       {:jason, "~> 1.4"},
       {:postgrex, "~> 0.22.4"},
       {:burrito, "~> 1.6", only: :prod},

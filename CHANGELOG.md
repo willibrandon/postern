@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+- The postgresql.conf checks say what the server logs, as the pg_hba.conf checks already
+  did: `unrecognized configuration parameter "shared_buffrs"`, with the closest catalog name
+  on a second line the way the server phrases a hint, and `invalid value for parameter
+  "wal_level": "nope"` with `Available values: minimal, replica, logical.` below it. A line
+  the server cannot read is now scanned the way guc-file.l scans it, so it is refused on the
+  token the scanner stops at, `syntax error near token "GB"` for `work_mem = 1.5GB`, since a
+  real takes no unit letters and the quotes are what make `'1.5GB'` a value, and a path, a
+  `*` or an unquoted `"` is refused where it stands. A quoted value takes the escapes the
+  server takes, and `include` is recognised in any case. `postern check` prints a hint
+  indented under its message.
 - A setting with a dot in its name, `pg_stat_statements.max` say, is no longer an unknown
   setting. The server keeps such a value as a placeholder until the module that owns it loads
   and checks it, and says nothing before then, so neither does Postern.
