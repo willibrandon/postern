@@ -21,6 +21,7 @@ defmodule Postern.PostgresqlConfDiagnostics do
   alias Postern.GucValue
   alias Postern.Parser.PostgresqlConf
   alias Postern.SettingHistory
+  alias Postern.StartupChecks
   alias Postern.StringSettings
 
   @error 1
@@ -42,7 +43,8 @@ defmodule Postern.PostgresqlConfDiagnostics do
     parse_diagnostics(entries) ++
       value_diagnostics(entries, catalog, versions) ++
       override_diagnostics(tree, entries, path) ++
-      include_diagnostics(tree, path)
+      include_diagnostics(tree, path) ++
+      startup_diagnostics(tree, entries, path, catalog)
   end
 
   @doc "Returns the selected PostgreSQL major version for a document."
@@ -99,6 +101,19 @@ defmodule Postern.PostgresqlConfDiagnostics do
       diagnostic(loser.entry.name_span, @hint, "overridden by a later entry #{where}")
       | code: "override"
     }
+  end
+
+  # What the postmaster would refuse at start, across the tree's winning
+  # values, or the document's own when there is no tree.
+  defp startup_diagnostics(nil, entries, path, catalog) do
+    tree = %{entries: Enum.map(entries, &%{path: path, entry: &1})}
+    startup_diagnostics(tree, entries, path, catalog)
+  end
+
+  defp startup_diagnostics(tree, _entries, path, catalog) do
+    for %{entry: entry, severity: severity, message: message} <-
+          StartupChecks.findings(tree, path, catalog),
+        do: diagnostic(entry.span, severity, message)
   end
 
   defp include_diagnostics(nil, _path), do: []

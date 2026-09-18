@@ -21,6 +21,9 @@ log would show after a reload, hint included.
   zone the server does not know or a log destination the version does not have.
 - Settings removed or renamed between versions, with the version that did it and the name
   that took their place, and settings that need a restart.
+- What the postmaster refuses at start although a reload passes it: `wal_level = minimal`
+  with archiving or streaming on, more than one recovery target, and autovacuum without the
+  statistics it needs.
 - A setting a later line overrides, in the same file or in one PostgreSQL reads after it, since
   it keeps the last one. Postern follows `include`, `include_if_exists` and `include_dir` the way
   the server does and reads `postgresql.auto.conf` last, so a value `ALTER SYSTEM` or a

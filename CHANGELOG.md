@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+- What the postmaster refuses at start is reported before the restart, in the version's words:
+  `wal_level = minimal` with WAL archiving on, `max_wal_senders` above zero, which it is by
+  default, or `summarize_wal` on, and more than one recovery target; `track_counts`
+  off with autovacuum on gets the warning autovacuum logs, with its hint. Each check weighs the
+  value that counts across the tree, or the default without one, and marks the last of the
+  lines in the file that take part.
 - A setting the target version does not have says what became of it, on the second line of
   the server's `unrecognized configuration parameter` error, which is what such a name is to
   the server, since it refuses the whole file for one: `It arrives in PostgreSQL 17.` for
