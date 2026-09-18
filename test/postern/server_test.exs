@@ -145,6 +145,25 @@ defmodule Postern.ServerTest do
       assert "postern.reloadConfig" in commands
     end
 
+    test "a live command's outcome comes back as a message the editor shows", %{client: client} do
+      request(client, %{
+        "jsonrpc" => "2.0",
+        "id" => 305,
+        "method" => "workspace/executeCommand",
+        "params" => %{
+          "command" => "postern.applyAlterSystem",
+          "arguments" => ["file:///etc/postgresql.conf", "work_mem", "64MB"]
+        }
+      })
+
+      assert_notification("window/showMessage", %{
+        "type" => 1,
+        "message" => "No server is reachable, so nothing ran."
+      })
+
+      assert_result(305, nil)
+    end
+
     test "the trust quick fix is offered without diagnostics in the request", %{client: client} do
       uri = "file:///etc/pg_hba.conf"
 

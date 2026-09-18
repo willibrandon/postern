@@ -21,6 +21,7 @@ defmodule Postern.Server do
   alias GenLSP.Notifications.TextDocumentDidClose
   alias GenLSP.Notifications.TextDocumentDidOpen
   alias GenLSP.Notifications.TextDocumentPublishDiagnostics
+  alias GenLSP.Notifications.WindowShowMessage
   alias GenLSP.Requests.Initialize
   alias GenLSP.Requests.Shutdown
   alias GenLSP.Requests.TextDocumentCodeAction
@@ -42,6 +43,7 @@ defmodule Postern.Server do
   alias GenLSP.Structures.RenameOptions
   alias GenLSP.Structures.SaveOptions
   alias GenLSP.Structures.ServerCapabilities
+  alias GenLSP.Structures.ShowMessageParams
   alias GenLSP.Structures.TextDocumentSyncOptions
   alias Postern.ConfigTree
   alias Postern.Diagnostics
@@ -282,8 +284,8 @@ defmodule Postern.Server do
 
   def handle_request(%TextDocumentCodeAction{params: params}, lsp) do
     live =
-      live_feature_result(lsp, params.text_document.uri, fn uri, _text, snapshot ->
-        LiveFeatures.code_actions(uri, snapshot)
+      live_feature_result(lsp, params.text_document.uri, fn uri, text, snapshot ->
+        LiveFeatures.code_actions(uri, text, snapshot, params.range)
       end)
 
     diagnostics =
@@ -322,18 +324,25 @@ defmodule Postern.Server do
     {:reply, nil, lsp}
   end
 
+  # A live command runs on the server, and what the server answered is
+  # shown to the user as a message, since a client discards a command's
+  # result.
   def handle_request(%WorkspaceExecuteCommand{params: params}, lsp) do
     arguments = params.arguments || []
-    uri = List.first(arguments)
+    oracle = current_assigns(lsp).live_oracle
+    result = LiveOracle.execute(oracle, params.command, arguments)
 
-    arguments =
-      case DocumentStore.get(lsp, uri) do
-        %{text: text} -> arguments ++ [text]
-        nil -> arguments
-      end
+    case LiveFeatures.report(params.command, arguments, result, LiveOracle.snapshot(oracle)) do
+      {type, message} ->
+        GenLSP.notify(lsp, %WindowShowMessage{
+          params: %ShowMessageParams{type: type, message: message}
+        })
 
-    reply = LiveOracle.execute(current_assigns(lsp).live_oracle, params.command, arguments)
-    {:reply, reply, lsp}
+      nil ->
+        :ok
+    end
+
+    {:reply, nil, lsp}
   end
 
   @impl true

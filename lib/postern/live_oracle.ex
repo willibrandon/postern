@@ -15,8 +15,6 @@ defmodule Postern.LiveOracle do
 
   use GenServer
 
-  alias Postern.Parser.PostgresqlConf
-
   @backoff_start 1_000
   @backoff_max 30_000
 
@@ -130,20 +128,14 @@ defmodule Postern.LiveOracle do
     {:reply, query_scalar(conn, "select pg_reload_conf()"), state}
   end
 
+  # One statement for one setting; the server's own refusal, with its
+  # detail and hint, is the answer when it refuses.
   def handle_call(
-        {:execute, "postern.showEffectiveValue", _arguments},
+        {:execute, "postern.applyAlterSystem", [_uri, name, value]},
         _from,
         %{conn: conn} = state
       ) do
-    {:reply, query_snapshot(conn), state}
-  end
-
-  def handle_call(
-        {:execute, "postern.applyAlterSystem", [_uri, text]},
-        _from,
-        %{conn: conn} = state
-      ) do
-    {:reply, apply_settings(conn, text), state}
+    {:reply, query_scalar(conn, Postern.LiveFeatures.statement(name, value)), state}
   end
 
   def handle_call({:execute, _command, _arguments}, _from, state) do
@@ -264,30 +256,6 @@ defmodule Postern.LiveOracle do
   catch
     :exit, _reason -> {:error, :unreachable}
   end
-
-  defp apply_settings(conn, text) do
-    {:ok, entries} = PostgresqlConf.parse(text)
-    Enum.reduce_while(entries, {:ok, []}, &apply_setting(conn, &1, &2))
-  rescue
-    _error -> {:error, :unreachable}
-  catch
-    :exit, _reason -> {:error, :unreachable}
-  end
-
-  defp apply_setting(conn, %{type: :assignment, name: name, value: value}, {:ok, applied}) do
-    if Regex.match?(~r/^[A-Za-z_][A-Za-z0-9_.-]*$/, name) do
-      statement = "ALTER SYSTEM SET #{name} = '#{String.replace(value, "'", "''")}'"
-
-      case Postgrex.query(conn, statement, [], query_type: :text) do
-        {:ok, _result} -> {:cont, {:ok, [name | applied]}}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    else
-      {:cont, {:ok, applied}}
-    end
-  end
-
-  defp apply_setting(_conn, _entry, result), do: {:cont, result}
 
   defp parse_connection_string(string) do
     uri = URI.parse(string)

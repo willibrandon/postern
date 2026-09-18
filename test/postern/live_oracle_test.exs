@@ -41,6 +41,14 @@ defmodule Postern.LiveOracleTest do
       assert elapsed < 500
 
       assert LiveOracle.execute(oracle, "postern.reloadConfig") == {:error, :unreachable}
+
+      assert LiveOracle.execute(oracle, "postern.applyAlterSystem", [
+               "file:///x",
+               "work_mem",
+               "64MB"
+             ]) ==
+               {:error, :unreachable}
+
       GenServer.stop(oracle)
     end)
   end
@@ -78,5 +86,37 @@ defmodule Postern.LiveOracleTest do
     assert options[:database] == "app"
     assert options[:username] == "alice"
     assert options[:password] == "secret"
+  end
+
+  @tag :live
+  test "runs one ALTER SYSTEM SET on the server and answers with its refusal when it refuses" do
+    {:ok, oracle} = LiveOracle.start_link(LiveOracle.connection_options(%{}))
+    assert %{settings: _settings} = LiveOracle.snapshot(oracle)
+
+    assert {:ok, _rows} =
+             LiveOracle.execute(oracle, "postern.applyAlterSystem", [
+               "file:///x",
+               "work_mem",
+               "64MB"
+             ])
+
+    assert {:error, %Postgrex.Error{postgres: %{message: message}}} =
+             LiveOracle.execute(oracle, "postern.applyAlterSystem", [
+               "file:///x",
+               "work_mem",
+               "128mb"
+             ])
+
+    assert message == ~s(invalid value for parameter "work_mem": "128mb")
+
+    assert LiveOracle.execute(oracle, "postern.showEffectiveValue", ["file:///x"]) ==
+             {:error, :unknown_command}
+
+    {:ok, conn} =
+      Postgrex.start_link(LiveOracle.connection_options(%{}) ++ [connect_timeout: 5_000])
+
+    Postgrex.query!(conn, "alter system reset work_mem", [])
+    GenServer.stop(conn)
+    GenServer.stop(oracle)
   end
 end

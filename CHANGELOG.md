@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+- The live code action writes one setting, the one under the cursor, with ALTER SYSTEM SET,
+  and its title is the statement, so it is read before it runs; what the server answered
+  comes back as a message the editor shows, with what applies the value in the words of the
+  setting's context, or the server's own refusal with its hint. Before, the action ran ALTER
+  SYSTEM SET for every assignment in the file and nothing showed the result. The reload
+  action reports the same way, and the action that returned a snapshot nothing displayed is
+  gone.
 - `map=` on a pg_hba.conf rule and the map in pg_ident.conf are one name to the editor now: go
   to definition goes from the option to the map's first line and from a map to it, find
   references lists the lines that define the map and the rules that name it across both

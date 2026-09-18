@@ -7,7 +7,9 @@ Postern parses the three formats itself and checks them against catalogs of `pg_
 PostgreSQL 13 through 18, so it works with no server running. When it can reach a server, it reads
 `pg_file_settings`, `pg_hba_file_rules` and `pg_ident_file_mappings`. Those views are PostgreSQL
 parsing its own configuration files and reporting the line and the error, which means the editor
-shows the exact message a reload would produce, before the reload.
+shows the exact message a reload would produce, before the reload. With a connection, a code
+action writes the setting under the cursor with `ALTER SYSTEM SET`, or reloads, and shows what
+the server answered.
 
 ## What it reports
 
