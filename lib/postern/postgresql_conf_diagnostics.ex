@@ -107,16 +107,24 @@ defmodule Postern.PostgresqlConfDiagnostics do
   end
 
   defp setting_diagnostics(entry, nil, name, versions, catalog) do
-    if setting_available_elsewhere?(name, catalog.version, versions) do
-      [
-        diagnostic(
-          entry.name_span,
-          @warning,
-          "setting #{inspect(name)} is not available in PostgreSQL #{catalog.version}; it may have been removed or renamed"
-        )
-      ]
-    else
-      unknown_setting_diagnostic(entry, name, versions)
+    cond do
+      # A name with a dot in it belongs to a module. The server keeps the
+      # value as a placeholder until the module loads and checks it, and says
+      # nothing before then, so neither does this.
+      String.contains?(name, ".") ->
+        []
+
+      setting_available_elsewhere?(name, catalog.version, versions) ->
+        [
+          diagnostic(
+            entry.name_span,
+            @warning,
+            "setting #{inspect(name)} is not available in PostgreSQL #{catalog.version}; it may have been removed or renamed"
+          )
+        ]
+
+      true ->
+        unknown_setting_diagnostic(entry, name, versions)
     end
   end
 

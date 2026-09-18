@@ -11,7 +11,8 @@ shows the exact message a reload would produce, before the reload.
 
 ## What it reports
 
-- Unknown or misspelled settings, with the closest catalog name.
+- Unknown or misspelled settings, with the closest catalog name. A setting with a dot in its
+  name belongs to a module, and is taken as the server takes it until that module checks it.
 - Values that do not fit the setting's type, unit, range or enum.
 - Settings removed or renamed between versions, and settings that need a restart.
 - A setting a later line overrides, in the same file or in one PostgreSQL reads after it, since

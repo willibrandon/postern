@@ -134,6 +134,17 @@ defmodule Postern.PostgresqlConfDiagnosticsTest do
     end
   end
 
+  test "a module's setting is a placeholder the server takes as it is" do
+    for line <- [
+          "pg_stat_statements.max = 5000",
+          "auto_explain.log_min_duration = 250ms",
+          "x.y = on"
+        ] do
+      assert Diagnostics.for_document("file:///tmp/postgresql.conf", line <> "\n", %{"pg" => 18}) ==
+               []
+    end
+  end
+
   test "a setting with the internal context cannot be changed, whatever its value" do
     for line <- ["block_size = 8192", "block_size = abc", "data_checksums = on"] do
       [diagnostic] =

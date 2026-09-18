@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- A setting with a dot in its name, `pg_stat_statements.max` say, is no longer an unknown
+  setting. The server keeps such a value as a placeholder until the module that owns it loads
+  and checks it, and says nothing before then, so neither does Postern.
 - A setting with the internal context, `block_size` or `data_checksums` say, is an error on its
   name in the server's words, `parameter "block_size" cannot be changed`, whatever its value.
   The build, initdb or the server itself fixed it, which the hover now says, and completion no
