@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+- The spellings `pg_settings` hides are taken: `wal_level = archive` and `hot_standby` from
+  before `replica` was the name, and `true`, `false`, `yes`, `no`, `1` and `0` on the enum
+  settings that used to be booleans. The catalog task reads them from the enum tables in a
+  git checkout of PostgreSQL, `mix postern.catalog --source ~/src/postgres`, and records each
+  with the visible value it stands for, which the hover names; completion keeps offering the
+  visible values only. The hover's default is now `boot_val`, what the server assumes without
+  a line for the setting, rather than whatever the catalog's server was running with.
 - The postgresql.conf checks say what the server logs, as the pg_hba.conf checks already
   did: `unrecognized configuration parameter "shared_buffrs"`, with the closest catalog name
   on a second line the way the server phrases a hint, and `invalid value for parameter

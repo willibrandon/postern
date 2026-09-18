@@ -121,7 +121,7 @@ mix deps.get
 mix test
 mix credo --strict
 mix format --check-formatted
-mix postern.catalog   # regenerate priv/catalog from PostgreSQL containers on ports 5413 to 5418
+mix postern.catalog --source ~/src/postgres   # regenerate priv/catalog from the containers on ports 5413 to 5418
 ```
 
 Release binaries are built with [Burrito](https://github.com/burrito-elixir/burrito), which needs
@@ -130,6 +130,10 @@ Zig 0.16.0, `xz`, and `7z` for the Windows target:
 ```sh
 MIX_ENV=prod mix release
 ```
+
+The catalog task queries `pg_settings` on each server and reads the enum tables of the same
+version from the checkout, since the view leaves out the spellings the server takes without
+listing them, `wal_level = archive` say.
 
 Burrito caches the unpacked runtime by application version, so bump the version in `mix.exs` or
 delete the `.burrito/postern_erts-*` directory when testing a rebuilt binary.

@@ -34,4 +34,20 @@ defmodule Postern.CatalogTest do
     assert Catalog.fetch(catalog, "wal_level")["enumvals"] == ["minimal", "replica", "logical"]
     assert Catalog.fetch(catalog, "shared_buffers")["enumvals"] == nil
   end
+
+  test "an enum row carries the spellings the server takes without listing them" do
+    for version <- [13, 18] do
+      catalog = Catalog.load(version)
+
+      assert Catalog.fetch(catalog, "wal_level")["hidden_enumvals"] ==
+               %{"archive" => "replica", "hot_standby" => "replica"}
+
+      assert Catalog.fetch(catalog, "synchronous_commit")["hidden_enumvals"]["true"] == "on"
+      assert Catalog.fetch(catalog, "shared_buffers")["hidden_enumvals"] == nil
+    end
+
+    # A spelling with no visible value of the same meaning stands alone.
+    assert Catalog.fetch(Catalog.load(18), "client_min_messages")["hidden_enumvals"]["info"] ==
+             nil
+  end
 end

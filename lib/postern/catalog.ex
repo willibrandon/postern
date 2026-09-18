@@ -13,8 +13,10 @@ defmodule Postern.Catalog do
   Loads the catalog for a PostgreSQL major version.
 
   The returned map contains the version and settings indexed by setting name.
-  The generator selects `enumvals` through the text protocol, so a row holds
-  the array literal the server prints, `{a,"b c"}`; here it becomes a list.
+  A row's `enumvals` is a list, decoded here when a catalog holds the array
+  literal the text protocol delivers, and an enum row's `hidden_enumvals`
+  maps each spelling the server takes without listing it to the visible
+  value it stands for.
   """
   @spec load(pos_integer(), keyword()) :: %{version: pos_integer(), settings: map()}
   def load(version, opts \\ []) when is_integer(version) do
@@ -99,8 +101,11 @@ defmodule Postern.Catalog do
 
   def array_literal(_other), do: []
 
-  defp with_enum_list(setting),
-    do: Map.update(setting, "enumvals", nil, &enum_list/1)
+  defp with_enum_list(setting) do
+    setting
+    |> Map.update("enumvals", nil, &enum_list/1)
+    |> Map.put_new("hidden_enumvals", if(setting["vartype"] == "enum", do: %{}, else: nil))
+  end
 
   defp enum_list(nil), do: nil
   defp enum_list(values), do: array_literal(values)

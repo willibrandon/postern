@@ -256,12 +256,14 @@ defmodule Postern.PostgresqlConfDiagnostics do
     end
   end
 
-  # config_enum_lookup_by_name compares without regard to case, and the hint
-  # lists the values the way config_enum_get_options prints them.
+  # config_enum_lookup_by_name compares without regard to case and takes the
+  # hidden spellings too, while the hint lists the visible values the way
+  # config_enum_get_options prints them.
   defp validate_enum(value, setting) do
     enum_values = Catalog.array_literal(setting["enumvals"])
+    hidden = Map.keys(setting["hidden_enumvals"] || %{})
 
-    if String.downcase(value) in Enum.map(enum_values, &String.downcase/1) do
+    if String.downcase(value) in Enum.map(enum_values ++ hidden, &String.downcase/1) do
       :ok
     else
       {:error, invalid(setting, value, "Available values: #{Enum.join(enum_values, ", ")}.")}

@@ -153,6 +153,26 @@ defmodule Postern.PostgresqlConfDiagnosticsTest do
     end
   end
 
+  test "an enum takes the spellings the server hides, in any case, and lists the visible ones" do
+    for line <- [
+          "wal_level = archive",
+          "wal_level = ARCHIVE",
+          "wal_level = hot_standby",
+          "synchronous_commit = true",
+          "huge_pages = 1",
+          "log_min_messages = debug"
+        ] do
+      assert Diagnostics.for_document("file:///tmp/postgresql.conf", line <> "\n", %{"pg" => 18}) ==
+               []
+    end
+
+    [diagnostic] =
+      Diagnostics.for_document("file:///tmp/postgresql.conf", "wal_level = nope\n", %{"pg" => 18})
+
+    assert diagnostic.message ==
+             ~s(invalid value for parameter "wal_level": "nope"\nAvailable values: minimal, replica, logical.)
+  end
+
   test "a module's setting is a placeholder the server takes as it is" do
     for line <- [
           "pg_stat_statements.max = 5000",

@@ -161,8 +161,9 @@ defmodule Postern.Features do
       [
         "**Type:** `#{setting["vartype"]}`",
         optional_detail("Unit", setting["unit"]),
-        optional_detail("Default", setting["reset_val"] || setting["boot_val"]),
+        optional_detail("Default", setting["boot_val"]),
         range_detail(setting),
+        hidden_detail(setting),
         optional_detail("Context", setting["context"]),
         "**PostgreSQL:** #{version} (first appeared in #{first_version})"
       ]
@@ -237,6 +238,23 @@ defmodule Postern.Features do
         nil
     end
   end
+
+  # The spellings the server takes but does not list, each with the value it
+  # stands for when the table says so.
+  defp hidden_detail(%{"hidden_enumvals" => hidden})
+       when is_map(hidden) and map_size(hidden) > 0 do
+    taken =
+      hidden
+      |> Enum.sort()
+      |> Enum.map_join(", ", fn
+        {spelling, nil} -> "`#{spelling}`"
+        {spelling, meaning} -> "`#{spelling}` as `#{meaning}`"
+      end)
+
+    "**Also taken:** " <> taken
+  end
+
+  defp hidden_detail(_setting), do: nil
 
   defp first_version(name) do
     Enum.find(Catalog.versions(), Catalog.latest(), fn version ->

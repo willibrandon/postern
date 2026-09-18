@@ -45,6 +45,47 @@ defmodule Postern.FeaturesTest do
     refute "block_size" in Enum.map(items, & &1.label)
   end
 
+  test "hover names the spellings the server hides, and the default the server starts with" do
+    %{contents: %{value: value}} =
+      Features.hover(
+        "file:///tmp/postgresql.conf",
+        "wal_level = archive\n",
+        %Position{line: 0, character: 3},
+        %{
+          "pg" => 18
+        }
+      )
+
+    assert value =~ "**Values:** `minimal`, `replica`, `logical`"
+    assert value =~ "**Also taken:** `archive` as `replica`, `hot_standby` as `replica`"
+
+    %{items: items} =
+      Features.completion(
+        "file:///tmp/postgresql.conf",
+        "wal_level = \n",
+        %Position{line: 0, character: 12},
+        %{
+          "pg" => 18
+        }
+      )
+
+    assert Enum.map(items, & &1.label) == ["minimal", "replica", "logical"]
+
+    # boot_val is what the server assumes without a line for the setting;
+    # reset_val is whatever the catalog's server happened to be running with.
+    %{contents: %{value: value}} =
+      Features.hover(
+        "file:///tmp/postgresql.conf",
+        "listen_addresses = '*'\n",
+        %Position{line: 0, character: 3},
+        %{
+          "pg" => 18
+        }
+      )
+
+    assert value =~ "**Default:** `localhost`"
+  end
+
   test "hover lists enum values without the literal's quotes" do
     text = "default_transaction_isolation = 'read committed'\n"
     position = %Position{line: 0, character: 3}
