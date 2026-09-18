@@ -117,6 +117,73 @@ defmodule Postern.ServerTest do
     end
   end
 
+  describe "the files a tree reads while they are closed" do
+    test "get diagnostics of their own, and lose them when the tree's last document closes", %{
+      client: client
+    } do
+      request(client, %{
+        "jsonrpc" => "2.0",
+        "id" => 420,
+        "method" => "initialize",
+        "params" => %{"processId" => nil, "rootUri" => nil, "capabilities" => %{}}
+      })
+
+      assert_result(420, _result)
+
+      directory =
+        Path.join(System.tmp_dir!(), "postern-tree-#{System.unique_integer([:positive])}")
+
+      File.mkdir_p!(Path.join(directory, "conf.d"))
+      File.write!(Path.join(directory, "postgresql.conf"), "port = 5432\ninclude_dir 'conf.d'\n")
+      File.write!(Path.join(directory, "conf.d/10-memory.conf"), "shared_buffrs = 1\n")
+      on_exit(fn -> File.rm_rf!(directory) end)
+
+      root = Postern.FileKind.path_to_uri(Path.join(directory, "postgresql.conf"))
+      included = Postern.FileKind.path_to_uri(Path.join(directory, "conf.d/10-memory.conf"))
+
+      notify(client, %{
+        "jsonrpc" => "2.0",
+        "method" => "textDocument/didOpen",
+        "params" => %{
+          "textDocument" => %{
+            "uri" => root,
+            "languageId" => "postgresql-conf",
+            "version" => 1,
+            "text" => "port = 5432\ninclude_dir 'conf.d'\n"
+          }
+        }
+      })
+
+      assert_notification("textDocument/publishDiagnostics", %{
+        "uri" => ^root,
+        "diagnostics" => []
+      })
+
+      assert_notification("textDocument/publishDiagnostics", %{
+        "uri" => ^included,
+        "diagnostics" => [
+          %{"message" => "unrecognized configuration parameter \"shared_buffrs\"" <> _rest}
+        ]
+      })
+
+      notify(client, %{
+        "jsonrpc" => "2.0",
+        "method" => "textDocument/didClose",
+        "params" => %{"textDocument" => %{"uri" => root}}
+      })
+
+      assert_notification("textDocument/publishDiagnostics", %{
+        "uri" => ^root,
+        "diagnostics" => []
+      })
+
+      assert_notification("textDocument/publishDiagnostics", %{
+        "uri" => ^included,
+        "diagnostics" => []
+      })
+    end
+  end
+
   describe "files on the disk" do
     test "a client that can watch files is asked to report changes to any .conf file", %{
       client: client
@@ -763,17 +830,12 @@ defmodule Postern.ServerTest do
         }
       })
 
-      assert_notification("textDocument/publishDiagnostics", %{
-        "uri" => ^root,
-        "diagnostics" => before
-      })
-
+      # A closed file of the tree is published too, so a URI may be published
+      # more than once per step; the last publish is the one that stands.
+      before = last_diagnostics(root)
       refute Enum.any?(messages.(before), &String.contains?(&1, "overridden"))
       # Opening the root checks the included file again, with the same result.
-      assert_notification("textDocument/publishDiagnostics", %{
-        "uri" => ^included,
-        "diagnostics" => [_]
-      })
+      assert [_] = last_diagnostics(included)
 
       notify(client, %{
         "jsonrpc" => "2.0",
@@ -784,15 +846,8 @@ defmodule Postern.ServerTest do
         }
       })
 
-      assert_notification("textDocument/publishDiagnostics", %{
-        "uri" => ^included,
-        "diagnostics" => []
-      })
-
-      assert_notification("textDocument/publishDiagnostics", %{
-        "uri" => ^root,
-        "diagnostics" => after_edit
-      })
+      assert last_diagnostics(included) == []
+      after_edit = last_diagnostics(root)
 
       assert [
                %{
@@ -920,5 +975,19 @@ defmodule Postern.ServerTest do
 
   defp server_assigns(server) do
     GenLSP.Assigns.get(server.assigns)
+  end
+
+  # The last diagnostics published for a URI, once the server has gone
+  # quiet about it.
+  defp last_diagnostics(uri, previous \\ nil) do
+    receive do
+      %{
+        "method" => "textDocument/publishDiagnostics",
+        "params" => %{"uri" => ^uri, "diagnostics" => diagnostics}
+      } ->
+        last_diagnostics(uri, diagnostics)
+    after
+      400 -> previous || flunk("no diagnostics were published for #{uri}")
+    end
   end
 end

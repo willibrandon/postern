@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+- A file the open document's tree reads while it is closed, one under `conf.d` or the
+  `postgresql.auto.conf` beside the root, gets diagnostics of its own under its own name, as
+  pg_file_settings reports every file at once, so the editor's problem view shows the bad
+  value in the included file from the root, and clears it when no open document reads that
+  file any more.
 - A change on the disk to a file a check reads, an include, the `postgresql.auto.conf` that
   ALTER SYSTEM rewrites, or the file beside the open one, checks the open documents again:
   the server asks a client that can watch files to report changes to any `.conf` file, and a

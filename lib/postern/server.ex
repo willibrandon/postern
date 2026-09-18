@@ -97,7 +97,8 @@ defmodule Postern.Server do
        initialization_options: nil,
        root_uri: nil,
        live_oracle: live_oracle,
-       watch_files: false
+       watch_files: false,
+       tree_uris: MapSet.new()
      )}
   end
 
@@ -402,7 +403,7 @@ defmodule Postern.Server do
     lsp = DocumentStore.put(lsp, doc.uri, doc.text, doc.version, doc.language_id, kind)
     publish_diagnostics(lsp, doc.uri, doc.text, doc.version)
     publish_related(lsp, doc.uri, document_kind(lsp, doc.uri))
-    {:noreply, lsp}
+    {:noreply, publish_tree_files(lsp)}
   end
 
   def handle_notification(%TextDocumentDidChange{params: params}, lsp) do
@@ -419,7 +420,7 @@ defmodule Postern.Server do
     lsp = DocumentStore.update(lsp, uri, text, version)
     publish_diagnostics(lsp, uri, text, version)
     publish_related(lsp, uri, document_kind(lsp, uri))
-    {:noreply, lsp}
+    {:noreply, publish_tree_files(lsp)}
   end
 
   def handle_notification(%TextDocumentDidClose{params: params}, lsp) do
@@ -432,7 +433,7 @@ defmodule Postern.Server do
     })
 
     publish_related(lsp, uri, kind)
-    {:noreply, lsp}
+    {:noreply, publish_tree_files(lsp)}
   end
 
   # A save may be what the server reads next, so the document and the ones
@@ -449,7 +450,7 @@ defmodule Postern.Server do
         :ok
     end
 
-    {:noreply, lsp}
+    {:noreply, publish_tree_files(lsp)}
   end
 
   # A file the checks read from the disk changed: an include, the auto file
@@ -460,7 +461,7 @@ defmodule Postern.Server do
       publish_diagnostics(lsp, uri, document.text, document.version)
     end
 
-    {:noreply, lsp}
+    {:noreply, publish_tree_files(lsp)}
   end
 
   # Gracefully ignore other notifications.
@@ -541,6 +542,64 @@ defmodule Postern.Server do
     end
 
     :ok
+  end
+
+  # The files an open document's tree reads that are not open themselves
+  # get diagnostics of their own, as pg_file_settings reports every file at
+  # once, and lose them again when no open document reads them any more.
+  defp publish_tree_files(lsp) do
+    documents = DocumentStore.all(lsp)
+
+    open =
+      MapSet.new(documents, fn {uri, _document} ->
+        FileKind.canonical(FileKind.uri_to_path(uri))
+      end)
+
+    options = document_options(lsp)
+
+    closed =
+      for {uri, %{text: text, kind: kind}} <- documents,
+          kind in [:postgresql_conf, :pg_hba_conf, :pg_ident_conf],
+          {tree, _other} =
+            Diagnostics.related_trees(
+              kind,
+              FileKind.canonical(FileKind.uri_to_path(uri)),
+              text,
+              options
+            ),
+          tree != nil,
+          path <- tree.files,
+          not MapSet.member?(open, path),
+          uniq: true,
+          do: {path, kind}
+
+    published =
+      MapSet.new(closed, fn {path, kind} ->
+        uri = FileKind.path_to_uri(path)
+
+        diagnostics =
+          case options.reader.read.(path) do
+            {:ok, text} ->
+              Diagnostics.for_document(uri, text, Map.put(feature_options(lsp), :kind, kind))
+
+            :error ->
+              []
+          end
+
+        GenLSP.notify(lsp, %TextDocumentPublishDiagnostics{
+          params: %PublishDiagnosticsParams{uri: uri, diagnostics: diagnostics}
+        })
+
+        uri
+      end)
+
+    for uri <- MapSet.difference(current_assigns(lsp).tree_uris, published) do
+      GenLSP.notify(lsp, %TextDocumentPublishDiagnostics{
+        params: %PublishDiagnosticsParams{uri: uri, diagnostics: []}
+      })
+    end
+
+    assign(lsp, tree_uris: published)
   end
 
   defp related_kinds(:postgresql_conf), do: [:postgresql_conf]
