@@ -20,6 +20,7 @@ defmodule Postern.PostgresqlConfDiagnostics do
   alias Postern.ConfigTree
   alias Postern.GucValue
   alias Postern.Parser.PostgresqlConf
+  alias Postern.SettingHistory
   alias Postern.StringSettings
 
   @error 1
@@ -107,28 +108,14 @@ defmodule Postern.PostgresqlConfDiagnostics do
         do: diagnostic(problem.span, problem.severity, problem.message)
   end
 
+  # A name the server does not know refuses the whole file, whatever the
+  # name's story. The story goes on a second line: a dotted name is a
+  # module's placeholder, and any other is looked up in the catalogs of the
+  # other versions and in the history of the names from before them.
   defp setting_diagnostics(entry, nil, name, versions, catalog) do
-    cond do
-      # A name with a dot in it belongs to a module. The server keeps the
-      # value as a placeholder until the module loads, and a module the
-      # catalog knows removes a placeholder it did not define, with a
-      # warning: since 15 in the words of the reserved prefix, before that
-      # as an unrecognized parameter.
-      String.contains?(name, ".") ->
-        placeholder_diagnostic(entry, name, catalog)
-
-      setting_available_elsewhere?(name, catalog.version, versions) ->
-        [
-          diagnostic(
-            entry.name_span,
-            @warning,
-            "setting #{inspect(name)} is not available in PostgreSQL #{catalog.version}; it may have been removed or renamed"
-          )
-        ]
-
-      true ->
-        unknown_setting_diagnostic(entry, name, versions)
-    end
+    if String.contains?(name, "."),
+      do: placeholder_diagnostic(entry, name, catalog),
+      else: unknown_setting_diagnostic(entry, name, versions, catalog.version)
   end
 
   # A setting with the internal context, fixed by the build, by initdb or by
@@ -179,31 +166,31 @@ defmodule Postern.PostgresqlConfDiagnostics do
     end
   end
 
-  # The server's message, and below it the closest catalog name, phrased the
-  # way the server phrases a hint of its own.
-  defp unknown_setting_diagnostic(entry, name, versions) do
-    suggestions =
-      versions
-      |> Enum.flat_map(fn version -> Catalog.load(version).settings |> Map.keys() end)
-      |> Enum.uniq()
-      |> Enum.map(&{jaro(String.downcase(name), String.downcase(&1)), &1})
-      |> Enum.sort_by(fn {score, candidate} -> {-score, candidate} end)
-
+  # The server's message, and below it what became of the name, or the
+  # closest catalog name, phrased the way the server phrases a hint.
+  defp unknown_setting_diagnostic(entry, name, versions, target) do
     message = ~s(unrecognized configuration parameter "#{name}")
 
     message =
-      case Enum.find(suggestions, fn {score, _candidate} -> score >= 0.80 end) do
-        {_score, candidate} -> message <> ~s(\nPerhaps you meant "#{candidate}".)
+      case SettingHistory.note(name, target) || suggestion(name, versions) do
         nil -> message
+        note -> message <> "\n" <> note
       end
 
     [diagnostic(entry.name_span, @error, message)]
   end
 
-  defp setting_available_elsewhere?(name, version, versions) do
-    Enum.any?(versions -- [version], fn other_version ->
-      Catalog.fetch(Catalog.load(other_version), name) != nil
-    end)
+  defp suggestion(name, versions) do
+    versions
+    |> Enum.flat_map(fn version -> Catalog.load(version).settings |> Map.keys() end)
+    |> Enum.uniq()
+    |> Enum.map(&{jaro(String.downcase(name), String.downcase(&1)), &1})
+    |> Enum.sort_by(fn {score, candidate} -> {-score, candidate} end)
+    |> Enum.find(fn {score, _candidate} -> score >= 0.80 end)
+    |> case do
+      {_score, candidate} -> ~s(Perhaps you meant "#{candidate}".)
+      nil -> nil
+    end
   end
 
   # A value is read the way parse_and_validate_value reads it, and refused in

@@ -39,12 +39,48 @@ defmodule Postern.PostgresqlConfDiagnosticsTest do
 
   test "selects the target version from a postern comment" do
     text = "# postern: pg=18\nold_snapshot_threshold = 1\n"
-    diagnostics = Diagnostics.for_document("file:///tmp/postgresql.conf", text)
+    [diagnostic] = Diagnostics.for_document("file:///tmp/postgresql.conf", text)
 
-    assert Enum.any?(
-             diagnostics,
-             &String.contains?(&1.message, "may have been removed or renamed")
-           )
+    assert diagnostic.message ==
+             ~s(unrecognized configuration parameter "old_snapshot_threshold"\nPostgreSQL 17 removed it.)
+  end
+
+  # A name the target version does not have refuses the whole file, and the
+  # second line says what became of it.
+  @history [
+    {13, "summarize_wal = on", "It arrives in PostgreSQL 17."},
+    {18, "force_parallel_mode = on", ~s(PostgreSQL 16 replaced it with "debug_parallel_query".)},
+    {18, "stats_temp_directory = 'x'", "PostgreSQL 15 removed it."},
+    {18, "promote_trigger_file = 'x'", "PostgreSQL 16 removed it."},
+    {18, "ssl_ecdh_curve = 'x'", ~s(PostgreSQL 18 replaced it with "ssl_groups".)},
+    {17, "ssl_ecdh_curve = 'x'", nil},
+    {13, "wal_keep_segments = 32", ~s(PostgreSQL 13 replaced it with "wal_keep_size".)},
+    {18, "checkpoint_segments = 32", ~s(PostgreSQL 9.5 replaced it with "max_wal_size".)},
+    {18, "standby_mode = on",
+     "PostgreSQL 12 removed it; a standby.signal file in the data directory takes its place."},
+    {18, "silent_mode = on", "PostgreSQL 9.2 removed it."},
+    {18, "shared_buffrs = 1", ~s(Perhaps you meant "shared_buffers".)},
+    {18, "zzzz = 1", :nothing}
+  ]
+
+  for {version, line, note} <- @history do
+    test "#{line} on #{version}" do
+      [name | _rest] = String.split(unquote(line))
+
+      diagnostics =
+        Diagnostics.for_document("file:///tmp/postgresql.conf", unquote(line) <> "\n", %{
+          "pg" => unquote(version)
+        })
+        |> Enum.map(&{&1.severity, &1.message})
+
+      first = ~s(unrecognized configuration parameter "#{name}")
+
+      case unquote(note) do
+        nil -> assert diagnostics == []
+        :nothing -> assert diagnostics == [{1, first}]
+        note -> assert diagnostics == [{1, first <> "\n" <> note}]
+      end
+    end
   end
 
   test "unknown settings get a Jaro-based suggestion" do

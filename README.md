@@ -19,7 +19,8 @@ log would show after a reload, hint included.
   catalog does not know is taken as the server takes it until that module checks it.
 - Values that do not fit the setting's type, unit, range, enum or vocabulary, such as a time
   zone the server does not know or a log destination the version does not have.
-- Settings removed or renamed between versions, and settings that need a restart.
+- Settings removed or renamed between versions, with the version that did it and the name
+  that took their place, and settings that need a restart.
 - A setting a later line overrides, in the same file or in one PostgreSQL reads after it, since
   it keeps the last one. Postern follows `include`, `include_if_exists` and `include_dir` the way
   the server does and reads `postgresql.auto.conf` last, so a value `ALTER SYSTEM` or a

@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+- A setting the target version does not have says what became of it, on the second line of
+  the server's `unrecognized configuration parameter` error, which is what such a name is to
+  the server, since it refuses the whole file for one: `It arrives in PostgreSQL 17.` for
+  `summarize_wal` on 13, `PostgreSQL 16 replaced it with "debug_parallel_query".` for
+  `force_parallel_mode` on 18, `PostgreSQL 15 removed it.` for `stats_temp_directory`, and for
+  names from before 13 that still turn up in copied files, `checkpoint_segments` or
+  `wal_keep_segments` say, the release that dropped each and the name that took its place.
 - The catalogs know the settings of the contrib modules and plpgsql, pg_stat_statements,
   auto_explain, pg_prewarm, pg_trgm, auth_delay and, on the versions that have them,
   postgres_fdw, basic_archive, basebackup_to_shell, isn, passwordcheck and pgcrypto, so
