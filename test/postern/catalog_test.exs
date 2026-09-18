@@ -35,6 +35,15 @@ defmodule Postern.CatalogTest do
     assert Catalog.fetch(catalog, "shared_buffers")["enumvals"] == nil
   end
 
+  test "a catalog carries the server's time zone names and encodings" do
+    for version <- Catalog.versions() do
+      catalog = Catalog.load(version)
+      assert "Europe/Berlin" in catalog.timezones
+      assert "UTF8" in catalog.encodings
+      assert "unicode" in catalog.encoding_aliases
+    end
+  end
+
   test "an enum row carries the spellings the server takes without listing them" do
     for version <- [13, 18] do
       catalog = Catalog.load(version)

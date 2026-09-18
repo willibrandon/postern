@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+- A string setting with a check hook is checked the way the hook checks it, in its words:
+  the DateStyle words and the two of them that may not disagree, the log destinations a
+  version has, the resource managers `wal_consistency_checking` can mask, the encodings and
+  their aliases, the time zone names the server knows and the POSIX specification a name can
+  fall back to, the recovery targets, and the grammar of `synchronous_standby_names`, with
+  `syntax error at or near "b"` where the server's parser would stop. The catalog carries the
+  server's time zone names and encodings for it, and completion offers them. What the server
+  checks only when it uses a value, `shared_preload_libraries` or `primary_conninfo` say, is
+  taken as it is.
 - The spellings `pg_settings` hides are taken: `wal_level = archive` and `hot_standby` from
   before `replica` was the name, and `true`, `false`, `yes`, `no`, `1` and `0` on the enum
   settings that used to be booleans. The catalog task reads them from the enum tables in a

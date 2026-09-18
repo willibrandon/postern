@@ -16,7 +16,8 @@ log would show after a reload, hint included.
 
 - Unknown or misspelled settings, with the closest catalog name. A setting with a dot in its
   name belongs to a module, and is taken as the server takes it until that module checks it.
-- Values that do not fit the setting's type, unit, range or enum.
+- Values that do not fit the setting's type, unit, range, enum or vocabulary, such as a time
+  zone the server does not know or a log destination the version does not have.
 - Settings removed or renamed between versions, and settings that need a restart.
 - A setting a later line overrides, in the same file or in one PostgreSQL reads after it, since
   it keeps the last one. Postern follows `include`, `include_if_exists` and `include_dir` the way

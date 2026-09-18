@@ -153,6 +153,43 @@ defmodule Postern.PostgresqlConfDiagnosticsTest do
     end
   end
 
+  # A string setting with a check hook is refused the way the hook refuses
+  # it, with the detail on a second line, or with the hook's own message.
+  @strings [
+    {"datestyle = 'ISO, MDX'",
+     ~s(invalid value for parameter "DateStyle": "ISO, MDX"\nUnrecognized key word: "mdx".)},
+    {"timezone = 'Mars/Olympus'", ~s(invalid value for parameter "TimeZone": "Mars/Olympus")},
+    {"log_destination = 'stderr, csvlogg'",
+     ~s(invalid value for parameter "log_destination": "stderr, csvlogg"\nUnrecognized key word: "csvlogg".)},
+    {"client_encoding = 'utf-9'", ~s(invalid value for parameter "client_encoding": "utf-9")},
+    {"recovery_target = 'nope'",
+     ~s(invalid value for parameter "recovery_target": "nope"\nThe only allowed value is "immediate".)},
+    {"synchronous_standby_names = 'FIRST 2 (a, b'",
+     ~s|invalid value for parameter "synchronous_standby_names": "FIRST 2 (a, b"\nsyntax error at end of input|},
+    {"synchronous_standby_names = '0 (a)'",
+     "number of synchronous standbys (0) must be greater than zero"},
+    {"wal_consistency_checking = 'heap, nope'",
+     ~s(invalid value for parameter "wal_consistency_checking": "heap, nope"\nUnrecognized key word: "nope".)},
+    {"timezone = 'Europe/Berlin'", nil},
+    {"timezone = Europe/Berlin", nil},
+    {"timezone = 'Foo5Bar,M3.2.0,M11.1.0'", nil},
+    {"log_destination = 'STDERR'", nil},
+    {"client_encoding = 'UTF-8'", nil},
+    {"synchronous_standby_names = 'any 1 (a, \"b c\", *)'", nil},
+    {"shared_preload_libraries = 'anything'", nil}
+  ]
+
+  for {line, expected} <- @strings do
+    test "#{line} on 18" do
+      diagnostics =
+        Diagnostics.for_document("file:///tmp/postgresql.conf", unquote(line) <> "\n", %{
+          "pg" => 18
+        })
+
+      assert Enum.map(diagnostics, & &1.message) == List.wrap(unquote(expected))
+    end
+  end
+
   test "an enum takes the spellings the server hides, in any case, and lists the visible ones" do
     for line <- [
           "wal_level = archive",

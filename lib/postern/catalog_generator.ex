@@ -25,6 +25,15 @@ defmodule Postern.CatalogGenerator do
    order by name
   """
 
+  @timezones "select name from pg_timezone_names order by name"
+
+  @encodings """
+  select distinct pg_encoding_to_char(i) as name
+    from generate_series(0, 100) as i
+   where pg_encoding_to_char(i) <> ''
+   order by name
+  """
+
   @default_ports %{13 => 5413, 14 => 5414, 15 => 5415, 16 => 5416, 17 => 5417, 18 => 5418}
 
   @doc """
@@ -39,6 +48,7 @@ defmodule Postern.CatalogGenerator do
     output_dir = Keyword.get(opts, :output_dir, "priv/catalog")
     source = Keyword.get(opts, :source) || raise "a PostgreSQL git checkout is needed as :source"
     hidden = hidden_enums(source, version)
+    aliases = encoding_aliases(source, version)
 
     {:ok, connection} =
       Postgrex.start_link(
@@ -62,7 +72,14 @@ defmodule Postern.CatalogGenerator do
               |> with_enums(hidden)
             end)
 
-          catalog = %{"version" => version, "settings" => settings}
+          catalog = %{
+            "version" => version,
+            "settings" => settings,
+            "timezones" => column(connection, @timezones),
+            "encodings" => column(connection, @encodings),
+            "encoding_aliases" => aliases
+          }
+
           path = Path.join(output_dir, "pg#{version}.json")
 
           File.mkdir_p!(output_dir)
@@ -125,6 +142,36 @@ defmodule Postern.CatalogGenerator do
       entries = Map.get(tables, table) || raise "no table #{table} for #{setting} in #{ref}"
       {setting, hidden_of(entries)}
     end)
+  end
+
+  @doc """
+  The encoding aliases of a version, from the table in encnames.c of the
+  checkout at `source`: the spellings `pg_char_to_encoding` accepts once it
+  has dropped everything but letters and digits and lowercased the rest.
+  """
+  @spec encoding_aliases(Path.t(), pos_integer()) :: [String.t()]
+  def encoding_aliases(source, version) do
+    ref = release_branch(source, version)
+    source |> git!(["show", "#{ref}:src/common/encnames.c"]) |> encoding_table()
+  end
+
+  @doc "The names in the `pg_encname_tbl` of a C source text."
+  @spec encoding_table(String.t()) :: [String.t()]
+  def encoding_table(text) do
+    case Regex.run(~r/pg_encname_tbl\[\]\s*=\s*\{(.*?)\n\};/s, text) do
+      [_all, body] ->
+        Regex.scan(~r/"([a-z0-9_]+)"/, body) |> Enum.map(fn [_all, name] -> name end)
+
+      nil ->
+        []
+    end
+  end
+
+  defp column(connection, query) do
+    case Postgrex.query(connection, query, [], query_type: :text) do
+      {:ok, result} -> Enum.map(result.rows, &hd/1)
+      {:error, error} -> raise "catalog query failed: #{Exception.message(error)}"
+    end
   end
 
   @doc """

@@ -20,6 +20,7 @@ defmodule Postern.PostgresqlConfDiagnostics do
   alias Postern.ConfigTree
   alias Postern.GucValue
   alias Postern.Parser.PostgresqlConf
+  alias Postern.StringSettings
 
   @error 1
   @warning 2
@@ -143,7 +144,7 @@ defmodule Postern.PostgresqlConfDiagnostics do
        ]
 
   defp setting_diagnostics(entry, setting, _name, _versions, catalog) do
-    case validate_value(entry.value, setting, catalog.version) do
+    case validate_value(entry.value, setting, catalog) do
       :ok -> []
       {:error, message} -> [diagnostic(entry.value_span, @error, message)]
     end
@@ -179,13 +180,22 @@ defmodule Postern.PostgresqlConfDiagnostics do
   # A value is read the way parse_and_validate_value reads it, and refused in
   # the server's words: the message it logs, and on a second line the hint
   # it adds, when it adds one.
-  defp validate_value(value, setting, version) do
+  defp validate_value(value, setting, catalog) do
     case setting["vartype"] do
       "bool" -> validate_boolean(value, setting)
       "enum" -> validate_enum(value, setting)
-      "integer" -> validate_integer(value, setting, version)
-      "real" -> validate_real(value, setting, version)
+      "integer" -> validate_integer(value, setting, catalog.version)
+      "real" -> validate_real(value, setting, catalog.version)
+      "string" -> validate_string(value, setting, catalog)
       _ -> :ok
+    end
+  end
+
+  defp validate_string(value, setting, catalog) do
+    case StringSettings.check(setting["name"], value, catalog, catalog.version) do
+      :ok -> :ok
+      {:invalid, detail} -> {:error, invalid(setting, value, detail)}
+      {:error, message} -> {:error, message}
     end
   end
 

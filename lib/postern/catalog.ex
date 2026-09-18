@@ -16,17 +16,27 @@ defmodule Postern.Catalog do
   A row's `enumvals` is a list, decoded here when a catalog holds the array
   literal the text protocol delivers, and an enum row's `hidden_enumvals`
   maps each spelling the server takes without listing it to the visible
-  value it stands for.
+  value it stands for. The catalog also carries the time zone names the
+  server knows, its encodings, and the aliases of those.
   """
-  @spec load(pos_integer(), keyword()) :: %{version: pos_integer(), settings: map()}
+  @spec load(pos_integer(), keyword()) :: %{
+          version: pos_integer(),
+          settings: map(),
+          timezones: [String.t()],
+          encodings: [String.t()],
+          encoding_aliases: [String.t()]
+        }
   def load(version, opts \\ []) when is_integer(version) do
     path = Path.join(catalog_dir(opts), "pg#{version}.json")
 
     with {:ok, json} <- File.read(path),
-         {:ok, %{"settings" => settings}} <- Jason.decode(json) do
+         {:ok, %{"settings" => settings} = catalog} <- Jason.decode(json) do
       %{
         version: version,
-        settings: Map.new(settings, &{Map.fetch!(&1, "name"), with_enum_list(&1)})
+        settings: Map.new(settings, &{Map.fetch!(&1, "name"), with_enum_list(&1)}),
+        timezones: Map.get(catalog, "timezones", []),
+        encodings: Map.get(catalog, "encodings", []),
+        encoding_aliases: Map.get(catalog, "encoding_aliases", [])
       }
     else
       {:error, reason} ->

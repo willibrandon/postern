@@ -86,6 +86,30 @@ defmodule Postern.FeaturesTest do
     assert value =~ "**Default:** `localhost`"
   end
 
+  test "completion offers a string setting's vocabulary, bare inside an open quote" do
+    uri = "file:///tmp/postgresql.conf"
+
+    %{items: items} =
+      Features.completion(uri, "timezone = Europe/Ber\n", %Position{line: 0, character: 21}, %{
+        "pg" => 18
+      })
+
+    assert Enum.map(items, & &1.label) == ["Europe/Berlin"]
+    assert Enum.map(items, & &1.insert_text) == ["Europe/Berlin"]
+
+    %{items: items} =
+      Features.completion(
+        uri,
+        "log_destination = 'stderr, cs\n",
+        %Position{line: 0, character: 29},
+        %{
+          "pg" => 18
+        }
+      )
+
+    assert Enum.map(items, & &1.insert_text) == ["csvlog"]
+  end
+
   test "hover lists enum values without the literal's quotes" do
     text = "default_transaction_isolation = 'read committed'\n"
     position = %Position{line: 0, character: 3}

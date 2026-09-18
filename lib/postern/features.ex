@@ -22,12 +22,14 @@ defmodule Postern.Features do
   alias GenLSP.Structures.MarkupContent
   alias GenLSP.Structures.Position
   alias GenLSP.Structures.Range
+  alias GenLSP.Structures.TextEdit
   alias Postern.Catalog
   alias Postern.ConfigTree
   alias Postern.FileKind
   alias Postern.Files
   alias Postern.Parser.PostgresqlConf
   alias Postern.PgHbaOptions
+  alias Postern.StringSettings
 
   @connection_types ~w(local host hostssl hostnossl hostgssenc hostnogssenc)
   @address_keywords ~w(all samehost samenet)
@@ -272,9 +274,19 @@ defmodule Postern.Features do
         version =
           Postern.PostgresqlConfDiagnostics.target_version(text, options, Catalog.versions())
 
-        setting = Catalog.fetch(Catalog.load(version), name)
+        catalog = Catalog.load(version)
+        setting = Catalog.fetch(catalog, name)
         after_cursor = String.slice(line, min(position.character, String.length(line))..-1//1)
-        value_completion(setting, prefix, before, after_cursor)
+
+        range = %Range{
+          start: %Position{
+            line: position.line,
+            character: position.character - String.length(prefix)
+          },
+          end: %Position{line: position.line, character: position.character}
+        }
+
+        value_completion(setting, prefix, before, after_cursor, catalog, range)
 
       _ ->
         version =
@@ -289,40 +301,59 @@ defmodule Postern.Features do
     end
   end
 
-  defp value_completion(nil, _prefix, _before, _after_cursor), do: []
+  defp value_completion(nil, _prefix, _before, _after_cursor, _catalog, _range), do: []
 
-  defp value_completion(setting, prefix, before, after_cursor) do
+  # The edit replaces the prefix itself, since a value such as a time zone
+  # holds characters an editor does not count as part of a word.
+  defp value_completion(setting, prefix, before, after_cursor, catalog, range) do
     values =
       case setting["vartype"] do
         "enum" -> Catalog.array_literal(setting["enumvals"])
         "bool" -> @boolean_values
+        "string" -> StringSettings.completions(setting["name"], catalog, catalog.version)
         _ -> []
       end
 
-    opened = String.ends_with?(String.slice(before, 0..-(String.length(prefix) + 1)//1), "'")
+    opened = quote_open?(String.slice(before, 0..-(String.length(prefix) + 1)//1))
     closed = String.starts_with?(after_cursor, "'")
+    list? = StringSettings.list?(setting["name"])
 
     values
     |> Enum.filter(&String.starts_with?(String.downcase(&1), String.downcase(prefix)))
     |> Enum.map(fn value ->
+      text = value_text(value, opened, closed, list?)
+
       %CompletionItem{
         completion_item(value, CompletionItemKind.value(), setting["vartype"])
-        | insert_text: value_text(value, opened, closed)
+        | insert_text: text,
+          text_edit: %TextEdit{range: range, new_text: text}
       }
     end)
   end
 
   # A value the file takes bare is a letter followed by letters, digits and a
   # few punctuation marks, or a number; anything else, such as an isolation
-  # level with a space in it, is quoted, unless the quote is already there.
-  defp value_text(value, opened, closed) do
+  # level with a space in it, is quoted. Inside a quote the editor has left
+  # open the closing one is added, unless the setting is a list that may go
+  # on after the value.
+  defp value_text(value, opened, closed, list?) do
     cond do
       Regex.match?(~r{^[A-Za-z_][A-Za-z0-9_.:/-]*$}, value) -> value
       Regex.match?(~r/^[+-]?[0-9]+$/, value) -> value
-      opened and closed -> value
+      opened and (closed or list?) -> value
       opened -> value <> "'"
       true -> "'" <> value <> "'"
     end
+  end
+
+  # Whether a single quote is open at the end of the text, with '' counting
+  # as a quote inside quotes rather than a pair.
+  defp quote_open?(text) do
+    text
+    |> String.replace("''", "")
+    |> String.graphemes()
+    |> Enum.count(&(&1 == "'"))
+    |> rem(2) == 1
   end
 
   defp hba_completion(text, position, options) do
@@ -410,7 +441,7 @@ defmodule Postern.Features do
   end
 
   defp word_prefix(before) do
-    case Regex.run(~r/([A-Za-z_][A-Za-z0-9_.-]*)$/, before, capture: :all_but_first) do
+    case Regex.run(~r{([A-Za-z_][A-Za-z0-9_.:/-]*)$}, before, capture: :all_but_first) do
       [prefix] -> prefix
       _ -> ""
     end
