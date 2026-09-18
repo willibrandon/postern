@@ -113,13 +113,22 @@ directories down the workspace, and takes the editor's word only for a file no r
 
 ```sh
 postern check postgresql.conf pg_hba.conf
-postern check --json pg_hba.conf
+postern check --pg 16 --strict postgresql.conf
+postern check --connection-string postgres://postgres@localhost/postgres postgresql.conf
+postern check --format github conf.d/*.conf
+postern check --stdin-filename pg_hba.conf < pg_hba.conf
 postern --help
 ```
 
-`check` exits 1 when any file has an error. Files are recognised by name, or by the
-`postgresql.conf`, `pg_hba.conf` or `pg_ident.conf` above them that includes them, and checking a
-root checks every file it reads.
+`check` exits 1 when any file has an error, or with `--strict` a warning. `--pg` picks the
+version to check against, `--connection-string` or `--live`, which takes the `PG` environment
+variables, compares the files with a running server the way the editor does, and
+`--stdin-filename` reads a file from stdin as if it stood at that path, which is how an editor's
+linter framework hands over an unsaved buffer. The output is for people, or with `--format` json,
+github, which GitHub Actions turns into annotations on the lines, or sarif, which code scanning
+shows on the pull request. Files are recognised by name, or by the `postgresql.conf`,
+`pg_hba.conf` or `pg_ident.conf` above them that includes them, and checking a root checks every
+file it reads.
 
 ## Configuration
 

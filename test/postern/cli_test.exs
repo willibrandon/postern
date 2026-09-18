@@ -113,4 +113,96 @@ defmodule Postern.CLITest do
     File.write!(path, File.read!(Path.join(@fixtures, "invalid_postgresql.conf")))
     path
   end
+
+  test "--pg checks against that version" do
+    directory = Path.join(System.tmp_dir!(), "postern-cli-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(directory)
+    on_exit(fn -> File.rm_rf!(directory) end)
+    path = Path.join(directory, "postgresql.conf")
+    File.write!(path, "summarize_wal = on\n")
+
+    assert capture_io(fn -> assert CLI.run(["check", "--pg", "18", path]) == 0 end) == ""
+
+    output = capture_io(fn -> assert CLI.run(["check", "--pg", "13", path]) == 1 end)
+
+    assert output =~
+             ~s(unrecognized configuration parameter "summarize_wal"\n  It arrives in PostgreSQL 17.)
+  end
+
+  test "--stdin-filename reads the file from stdin as if it stood at the path" do
+    directory = Path.join(System.tmp_dir!(), "postern-cli-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(directory)
+    on_exit(fn -> File.rm_rf!(directory) end)
+    File.write!(Path.join(directory, "pg_ident.conf"), "known root postgres\n")
+    hba = Path.join(directory, "pg_hba.conf")
+
+    output =
+      capture_io([input: "local all all peer map=missing\n"], fn ->
+        assert CLI.run(["check", "--stdin-filename", hba]) == 1
+      end)
+
+    assert output =~
+             ~s(pg_hba.conf:1:20: error: ident map "missing" does not exist in pg_ident.conf)
+  end
+
+  test "--format github writes one workflow command per diagnostic" do
+    path = invalid_config_path()
+    output = capture_io(fn -> assert CLI.run(["check", "--format", "github", path]) == 1 end)
+
+    assert output =~
+             ~r/^::error file=.*postgresql\.conf,line=\d+,col=\d+,endLine=\d+,endColumn=\d+,title=Postern::/m
+
+    refute output =~ "\n  "
+  end
+
+  test "--format sarif writes a run with one result per diagnostic" do
+    path = invalid_config_path()
+    output = capture_io(fn -> assert CLI.run(["check", "--format", "sarif", path]) == 1 end)
+    sarif = Jason.decode!(output)
+    assert sarif["version"] == "2.1.0"
+
+    assert [%{"tool" => %{"driver" => %{"name" => "Postern"}}, "results" => [result]}] =
+             sarif["runs"]
+
+    assert result["level"] == "error"
+    assert result["locations"] |> hd() |> get_in(["physicalLocation", "region", "startLine"]) == 1
+  end
+
+  test "--strict fails on a warning, and an unknown format is a usage error" do
+    directory = Path.join(System.tmp_dir!(), "postern-cli-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(directory)
+    on_exit(fn -> File.rm_rf!(directory) end)
+    ident = Path.join(directory, "pg_ident.conf")
+    File.write!(ident, "known root postgres\n")
+    File.write!(Path.join(directory, "pg_hba.conf"), "local all all peer\n")
+
+    capture_io(fn -> assert CLI.run(["check", ident]) == 0 end)
+    capture_io(fn -> assert CLI.run(["check", "--strict", ident]) == 1 end)
+    capture_io(:stderr, fn -> assert CLI.run(["check", "--format", "yaml", ident]) == 2 end)
+  end
+
+  @tag :live
+  test "--live compares the files with the server the environment names" do
+    directory = Path.join(System.tmp_dir!(), "postern-cli-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(directory)
+    on_exit(fn -> File.rm_rf!(directory) end)
+    path = Path.join(directory, "postgresql.conf")
+    File.write!(path, "port = 5432\n")
+
+    # The file is not the server's, so no live row lands on it, and the
+    # server being there means no note about it being away.
+    assert capture_io(fn -> assert CLI.run(["check", "--live", path]) == 0 end) == ""
+
+    output =
+      capture_io(fn ->
+        assert CLI.run([
+                 "check",
+                 "--connection-string",
+                 "postgres://postgres@127.0.0.1:1/postgres",
+                 path
+               ]) == 0
+      end)
+
+    assert output =~ "PostgreSQL server is unreachable"
+  end
 end

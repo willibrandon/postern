@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+- `postern check` takes `--pg` for the version to check against, `--connection-string` or
+  `--live` to compare the files with a running server the way the editor does, and
+  `--stdin-filename` to read a file from stdin as if it stood at that path, which is how an
+  editor's linter framework hands over an unsaved buffer. `--format github` writes one
+  workflow command per diagnostic, which GitHub Actions turns into an annotation on the line,
+  `--format sarif` a run that code scanning shows on the pull request, and `--strict` exits 1
+  on a warning as well as an error. The JSON output carries each diagnostic's code.
 - A file the open document's tree reads while it is closed, one under `conf.d` or the
   `postgresql.auto.conf` beside the root, gets diagnostics of its own under its own name, as
   pg_file_settings reports every file at once, so the editor's problem view shows the bad
