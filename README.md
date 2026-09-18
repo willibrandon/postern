@@ -50,6 +50,26 @@ log would show after a reload, hint included.
 
 ## Install
 
+With Homebrew on macOS or Linux:
+
+```sh
+brew install willibrandon/tap/postern
+```
+
+With Scoop on Windows:
+
+```powershell
+scoop bucket add willibrandon https://github.com/willibrandon/scoop-bucket
+scoop install postern
+```
+
+Or with winget, which installs the MSI from the releases page into Program Files, once the
+manifest each release submits to microsoft/winget-pkgs is in:
+
+```powershell
+winget install willibrandon.postern
+```
+
 The install script fetches the binary for your platform from the latest release, checks it
 against the checksums the release carries, and puts it in `~/.local/bin`, or where `--dir` says:
 
@@ -144,6 +164,35 @@ github, which GitHub Actions turns into annotations on the lines, or sarif, whic
 shows on the pull request. Files are recognised by name, or by the `postgresql.conf`,
 `pg_hba.conf` or `pg_ident.conf` above them that includes them, and checking a root checks every
 file it reads.
+
+### GitHub Actions
+
+The action in this repository fetches the release for the runner and runs `check` with an
+annotation on every line the server would refuse:
+
+```yaml
+- uses: willibrandon/postern@v0
+  with:
+    files: postgresql.conf pg_hba.conf
+    pg: "17"
+```
+
+Without `files` it checks every `postgresql.conf`, `postgresql.auto.conf`, `pg_hba.conf` and
+`pg_ident.conf` in the checkout. `strict` fails on a warning as well, `connection-string`
+compares the files with a running server, `version` picks a release other than the latest, and
+`path` runs a binary of your own.
+
+### pre-commit
+
+```yaml
+- repo: https://github.com/willibrandon/postern
+  rev: v0.3.0
+  hooks:
+    - id: postern
+```
+
+The hook runs `postern` from your `PATH` when it is there, and otherwise fetches the release
+that matches `rev` once into pre-commit's cache.
 
 ## Configuration
 

@@ -158,6 +158,71 @@ jobs:
           path: artifacts/vsix
           if-no-files-found: error
 
+  # The Windows installer, built with WiX from wix/postern.wxs the way
+  # dotsider's is: per machine into Program Files, on the system PATH, with
+  # a major upgrade replacing the version already installed.
+  msi:
+    name: Build the Windows installer
+    runs-on: windows-latest
+    timeout-minutes: 30
+    needs: [verify, binaries]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: binaries
+          path: artifacts/binaries
+      - name: Stage the binary under its installed name
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          New-Item -ItemType Directory -Path stage, artifacts\msi -Force | Out-Null
+          Copy-Item "artifacts\binaries\postern-$env:VERSION-win32-x64.exe" stage\postern.exe
+          # An MSI version is three numbers, so a prerelease suffix is dropped
+          $msiVersion = $env:VERSION -replace '-.*$', ''
+          "msi_version=$msiVersion" >> $env:GITHUB_ENV
+      - name: Install WiX Toolset
+        run: dotnet tool install --global wix
+      - name: Build the MSI
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          wix build wix\postern.wxs `
+            -d SourceDir=..\stage `
+            -d Version=$env:msi_version `
+            -arch x64 `
+            -out artifacts\msi\postern-$env:VERSION-win32-x64.msi
+      - name: Verify the MSI installs correctly
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          $installer = Resolve-Path "artifacts\msi\postern-$env:VERSION-win32-x64.msi"
+          $logFile = "artifacts\msi-install.log"
+          $proc = Start-Process msiexec.exe -ArgumentList "/i", $installer, "/qn", "/l*v", $logFile -Wait -NoNewWindow -PassThru
+          if ($proc.ExitCode -ne 0) {
+            Write-Error "MSI installation failed with exit code: $($proc.ExitCode)"
+            if (Test-Path $logFile) { Get-Content $logFile | Select-Object -Last 50 }
+            exit 1
+          }
+          $exePath = "${env:ProgramFiles}\postern\postern.exe"
+          if (-not (Test-Path $exePath)) {
+            Write-Error "postern.exe not found at $exePath"
+            exit 1
+          }
+          & $exePath --version
+          Write-Host "postern MSI verification passed"
+          Start-Process msiexec.exe -ArgumentList "/x", $installer, "/qn" -Wait -NoNewWindow
+      - uses: actions/upload-artifact@v7
+        with:
+          name: msi
+          path: artifacts/msi/*.msi
+          if-no-files-found: error
+
   smoke:
     name: Run the extension on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
@@ -228,12 +293,20 @@ jobs:
     name: Publish
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    needs: [verify, binaries, extension, smoke]
+    needs: [verify, binaries, extension, msi, smoke]
     if: github.event_name == 'push' && github.ref_type == 'tag'
     permissions:
       attestations: write
       contents: write
       id-token: write
+    outputs:
+      version: ${{ needs.verify.outputs.version }}
+      sha256_darwin_arm64: ${{ steps.checksums.outputs.sha256_darwin_arm64 }}
+      sha256_darwin_x64: ${{ steps.checksums.outputs.sha256_darwin_x64 }}
+      sha256_linux_arm64: ${{ steps.checksums.outputs.sha256_linux_arm64 }}
+      sha256_linux_x64: ${{ steps.checksums.outputs.sha256_linux_x64 }}
+      sha256_win32_x64: ${{ steps.checksums.outputs.sha256_win32_x64 }}
+      sha256_win32_x64_msi: ${{ steps.checksums.outputs.sha256_win32_x64_msi }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -263,7 +336,28 @@ jobs:
         with:
           name: vsix
           path: artifacts/release
+      - uses: actions/download-artifact@v8
+        with:
+          name: msi
+          path: artifacts/release
       - run: cp scripts/install.sh scripts/install.ps1 artifacts/release/
+      - name: Write the checksums of every asset
+        id: checksums
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          cd artifacts/release
+          sha256sum postern-* > SHA256SUMS
+          cat SHA256SUMS
+          sum() { grep " $1\$" SHA256SUMS | cut -d' ' -f1; }
+          {
+            echo "sha256_darwin_arm64=$(sum "postern-$VERSION-darwin-arm64")"
+            echo "sha256_darwin_x64=$(sum "postern-$VERSION-darwin-x64")"
+            echo "sha256_linux_arm64=$(sum "postern-$VERSION-linux-arm64")"
+            echo "sha256_linux_x64=$(sum "postern-$VERSION-linux-x64")"
+            echo "sha256_win32_x64=$(sum "postern-$VERSION-win32-x64.exe")"
+            echo "sha256_win32_x64_msi=$(sum "postern-$VERSION-win32-x64.msi")"
+          } >> "$GITHUB_OUTPUT"
       - name: Attest build provenance
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
@@ -344,3 +438,387 @@ jobs:
           remote="https://x-access-token:${{ secrets.POSTERN_NVIM_TOKEN }}@github.com/willibrandon/postern.nvim.git"
           git push --force "$remote" "$split:refs/heads/main"
           git push "$remote" "$split:refs/tags/$GITHUB_REF_NAME"
+
+
+  # The tap at willibrandon/homebrew-tap: the formula's version and the
+  # checksum of each platform's binary, committed and pushed to main.
+  homebrew:
+    name: Update the Homebrew tap
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: publish
+    if: "!contains(github.ref_name, '-')"
+    steps:
+      - name: Clone homebrew-tap repository
+        run: |
+          git clone https://x-access-token:${{ secrets.HOMEBREW_TAP_TOKEN }}@github.com/willibrandon/homebrew-tap.git
+          cd homebrew-tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+      - name: Update the formula with the new version and checksums
+        env:
+          VERSION: ${{ needs.publish.outputs.version }}
+          SHA_DARWIN_ARM64: ${{ needs.publish.outputs.sha256_darwin_arm64 }}
+          SHA_DARWIN_X64: ${{ needs.publish.outputs.sha256_darwin_x64 }}
+          SHA_LINUX_ARM64: ${{ needs.publish.outputs.sha256_linux_arm64 }}
+          SHA_LINUX_X64: ${{ needs.publish.outputs.sha256_linux_x64 }}
+        run: |
+          cd homebrew-tap
+          sed -i "s/version \".*\"/version \"$VERSION\"/" Formula/postern.rb
+          python3 << 'EOF'
+          import os
+          import re
+
+          with open('Formula/postern.rb') as f:
+              content = f.read()
+
+          shas = {
+              'darwin-arm64': os.environ['SHA_DARWIN_ARM64'],
+              'darwin-x64': os.environ['SHA_DARWIN_X64'],
+              'linux-arm64': os.environ['SHA_LINUX_ARM64'],
+              'linux-x64': os.environ['SHA_LINUX_X64'],
+          }
+
+          for platform, sha in shas.items():
+              pattern = rf'(url "https://github\.com/willibrandon/postern/releases/download/v#\{{version\}}/postern-#\{{version\}}-{platform}"\s+sha256 ")[^"]*(")'
+              content, count = re.subn(pattern, rf'\g<1>{sha}\2', content)
+              assert count == 1, platform
+
+          with open('Formula/postern.rb', 'w') as f:
+              f.write(content)
+          EOF
+          echo "Updated Formula/postern.rb:"
+          cat Formula/postern.rb
+      - name: Commit and push changes
+        env:
+          VERSION: ${{ needs.publish.outputs.version }}
+        run: |
+          cd homebrew-tap
+          git add Formula/postern.rb
+          git diff --staged --quiet || git commit -m "Update postern to $VERSION"
+          git push origin main
+
+  # The bucket at willibrandon/scoop-bucket: the manifest's version, the
+  # binary's URL and checksum and the shim's name, committed and pushed to main.
+  scoop:
+    name: Update the Scoop bucket
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: publish
+    if: "!contains(github.ref_name, '-')"
+    steps:
+      - name: Clone scoop-bucket repository
+        run: |
+          git clone https://x-access-token:${{ secrets.SCOOP_BUCKET_TOKEN }}@github.com/willibrandon/scoop-bucket.git
+          cd scoop-bucket
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+      - name: Update the manifest with the new version and checksum
+        env:
+          VERSION: ${{ needs.publish.outputs.version }}
+          SHA_WIN32_X64: ${{ needs.publish.outputs.sha256_win32_x64 }}
+        run: |
+          cd scoop-bucket
+          python3 << 'EOF'
+          import json
+          import os
+
+          version = os.environ['VERSION']
+          asset = f'postern-{version}-win32-x64.exe'
+
+          with open('bucket/postern.json') as f:
+              manifest = json.load(f)
+
+          manifest['version'] = version
+          manifest['architecture']['64bit']['url'] = f'https://github.com/willibrandon/postern/releases/download/v{version}/{asset}'
+          manifest['architecture']['64bit']['hash'] = os.environ['SHA_WIN32_X64']
+          manifest['bin'] = [[asset, 'postern']]
+
+          with open('bucket/postern.json', 'w') as f:
+              json.dump(manifest, f, indent=4)
+              f.write('\n')
+          EOF
+          echo "Updated bucket/postern.json:"
+          cat bucket/postern.json
+      - name: Commit and push changes
+        env:
+          VERSION: ${{ needs.publish.outputs.version }}
+        run: |
+          cd scoop-bucket
+          git add bucket/postern.json
+          git diff --staged --quiet || git commit -m "Update postern to $VERSION"
+          git push origin main
+
+  # The manifests in microsoft/winget-pkgs take a pull request per version,
+  # opened from the fork at willibrandon/winget-pkgs the way dotsider's are:
+  # wingetcreate bumps a package that is already there, and the templates in
+  # winget/ make the first submission, with the installer's checksum and
+  # product code read from the MSI itself.
+  winget:
+    name: Submit to winget
+    runs-on: windows-latest
+    timeout-minutes: 30
+    needs: publish
+    if: "!contains(github.ref_name, '-')"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Check if the package exists in winget-pkgs
+        id: check
+        shell: pwsh
+        run: |
+          $response = Invoke-WebRequest -Uri "https://api.github.com/repos/microsoft/winget-pkgs/contents/manifests/w/willibrandon/postern" -Method Head -SkipHttpErrorCheck
+          if ($response.StatusCode -eq 200) {
+            echo "exists=true" >> $env:GITHUB_OUTPUT
+          } else {
+            echo "exists=false" >> $env:GITHUB_OUTPUT
+          }
+
+      - name: Install wingetcreate
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri https://aka.ms/wingetcreate/latest -OutFile wingetcreate.exe
+
+      - name: Generate the winget manifest (update existing)
+        if: steps.check.outputs.exists == 'true'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.publish.outputs.version }}
+        run: |
+          $version = $env:VERSION
+          $url = "https://github.com/willibrandon/postern/releases/download/v$version/postern-$version-win32-x64.msi"
+
+          .\wingetcreate.exe update willibrandon.postern `
+            --version $version `
+            --urls $url `
+            --token $env:GH_TOKEN `
+            --out manifests
+
+      - name: Generate the winget manifest (new package)
+        if: steps.check.outputs.exists == 'false'
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.publish.outputs.version }}
+        run: |
+          $version = $env:VERSION
+
+          # The checked-in manifest templates carry a placeholder version
+          $manifestDir = "manifests/w/willibrandon/postern/$version"
+          New-Item -ItemType Directory -Path $manifestDir -Force | Out-Null
+          Copy-Item winget/willibrandon.postern.yaml $manifestDir/
+          Copy-Item winget/willibrandon.postern.installer.yaml $manifestDir/
+          Copy-Item winget/willibrandon.postern.locale.en-US.yaml $manifestDir/
+
+          Get-ChildItem $manifestDir -Filter *.yaml | ForEach-Object {
+            (Get-Content $_.FullName) -replace '0\.2\.1', $version | Set-Content $_.FullName
+          }
+          $installerYaml = "$manifestDir/willibrandon.postern.installer.yaml"
+
+          $url = "https://github.com/willibrandon/postern/releases/download/v$version/postern-$version-win32-x64.msi"
+          $msiFile = New-TemporaryFile
+          Invoke-WebRequest -Uri $url -OutFile $msiFile.FullName
+
+          $sha256 = (Get-FileHash $msiFile.FullName -Algorithm SHA256).Hash
+          (Get-Content $installerYaml) -replace "PLACEHOLDER_SHA256_X64", $sha256 | Set-Content $installerYaml
+
+          $pattern = 'ProductCode(\{[0-9a-fA-F-]{36}\})'
+          $stream = [System.IO.File]::OpenRead($msiFile.FullName)
+          $reader = [System.IO.StreamReader]::New($stream, [System.Text.Encoding]::ASCII)
+          $productCode = $null
+          while ($null -ne ($line = $reader.ReadLine())) {
+            if ($line -match $pattern) {
+              $productCode = $Matches[1]
+              break
+            }
+          }
+          $reader.Close()
+          $stream.Close()
+          Remove-Item $msiFile.FullName
+
+          if ($productCode) {
+            (Get-Content $installerYaml) -replace "\{PLACEHOLDER_PRODUCT_CODE_X64\}", $productCode | Set-Content $installerYaml
+          }
+
+          Write-Host "Generated postern manifests:"
+          Get-ChildItem $manifestDir | ForEach-Object { Write-Host $_.Name }
+
+      - name: Submit the winget PR via GitHub API
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.WINGET_PKGS_TOKEN }}
+          VERSION: ${{ needs.publish.outputs.version }}
+        run: |
+          $version = $env:VERSION
+          $branch = "postern-$version"
+          $manifestDir = "manifests/w/willibrandon/postern/$version"
+
+          function Upsert-WingetBranch {
+            param(
+              [Parameter(Mandatory=$true)][string]$Branch,
+              [Parameter(Mandatory=$true)][string]$Sha
+            )
+
+            $refPath = "heads/$Branch"
+            $updated = $false
+            for ($attempt = 1; $attempt -le 3 -and -not $updated; $attempt++) {
+              gh api "repos/willibrandon/winget-pkgs/git/ref/$refPath" --silent 2>$null
+              if ($LASTEXITCODE -eq 0) {
+                gh api "repos/willibrandon/winget-pkgs/git/refs/$refPath" -X PATCH -f sha="$Sha" -F force=true --silent
+              } else {
+                gh api repos/willibrandon/winget-pkgs/git/refs -X POST -f ref="refs/$refPath" -f sha="$Sha" --silent
+              }
+              $updated = $LASTEXITCODE -eq 0
+              if (-not $updated -and $attempt -lt 3) {
+                Write-Host "Winget branch upsert failed on attempt $attempt; retrying..."
+                Start-Sleep -Seconds 2
+              }
+            }
+
+            if (-not $updated) {
+              throw "Failed to create or update winget branch $Branch"
+            }
+
+            $resolvedSha = $null
+            $resolvedExitCode = 1
+            for ($attempt = 1; $attempt -le 5; $attempt++) {
+              $resolvedSha = $null
+              $resolvedSha = gh api "repos/willibrandon/winget-pkgs/git/ref/$refPath" --jq '.object.sha' 2>$null
+              $resolvedExitCode = $LASTEXITCODE
+              if ($resolvedExitCode -eq 0 -and $resolvedSha -eq $Sha) {
+                break
+              }
+
+              if ($attempt -lt 5) {
+                Write-Host "Winget branch $Branch has not resolved to $Sha yet; retrying..."
+                Start-Sleep -Seconds 2
+              }
+            }
+
+            if ($resolvedExitCode -ne 0 -or $resolvedSha -ne $Sha) {
+              throw "Winget branch $Branch points to $resolvedSha, expected $Sha"
+            }
+
+            Write-Host "Branch $Branch updated to $Sha"
+          }
+
+          function New-WingetPullRequest {
+            param(
+              [Parameter(Mandatory=$true)][string]$Branch,
+              [Parameter(Mandatory=$true)][string]$Title,
+              [Parameter(Mandatory=$true)][string]$Body
+            )
+
+            $existingJson = gh api "repos/microsoft/winget-pkgs/pulls?state=open&head=willibrandon:$Branch&base=master" 2>$null
+            if ($LASTEXITCODE -eq 0) {
+              $existing = $existingJson | ConvertFrom-Json | Select-Object -First 1
+              if ($existing) {
+                Write-Host "Winget PR already exists: $($existing.html_url)"
+                return
+              }
+            }
+
+            @{
+              title = $Title
+              head = "willibrandon:$Branch"
+              base = "master"
+              body = $Body
+              maintainer_can_modify = $true
+            } | ConvertTo-Json -Compress | Out-File -FilePath winget-pr.json -Encoding utf8NoBOM
+
+            $prUrl = gh api repos/microsoft/winget-pkgs/pulls -X POST --input winget-pr.json --jq '.html_url'
+            if ($LASTEXITCODE -ne 0) {
+              throw "Failed to create winget PR for $Branch"
+            }
+
+            Write-Host "Created winget PR: $prUrl"
+          }
+
+          Write-Host "Syncing fork with upstream..."
+          gh api repos/willibrandon/winget-pkgs/merge-upstream -X POST -f branch="master"
+
+          $forkRef = gh api repos/willibrandon/winget-pkgs/git/ref/heads/master --jq '.object.sha'
+          Write-Host "Fork master SHA: $forkRef"
+
+          $baseTreeSha = gh api "repos/willibrandon/winget-pkgs/git/commits/$forkRef" --jq '.tree.sha'
+          Write-Host "Base tree SHA: $baseTreeSha"
+
+          $treeEntries = [System.Collections.ArrayList]@()
+          Get-ChildItem -Path "manifests" -Recurse -File | ForEach-Object {
+            $content = [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($_.FullName))
+            $blobResponse = gh api repos/willibrandon/winget-pkgs/git/blobs -X POST -f content="$content" -f encoding="base64"
+            $blobSha = $blobResponse | ConvertFrom-Json | Select-Object -ExpandProperty sha
+            $path = "$manifestDir/$($_.Name)"
+            Write-Host "Created blob for $path : $blobSha"
+            [void]$treeEntries.Add(@{path=$path; mode="100644"; type="blob"; sha=$blobSha})
+          }
+
+          $treeData = @{base_tree=$baseTreeSha; tree=$treeEntries.ToArray()}
+          $treeJson = $treeData | ConvertTo-Json -Depth 10
+          Write-Host "Tree JSON: $treeJson"
+          $treeJson | Out-File -FilePath tree.json -Encoding utf8NoBOM
+          $newTree = gh api repos/willibrandon/winget-pkgs/git/trees -X POST --input tree.json
+          $newTreeSha = $newTree | ConvertFrom-Json | Select-Object -ExpandProperty sha
+          Write-Host "New tree SHA: $newTreeSha"
+          if ($newTreeSha -eq $baseTreeSha) {
+            Write-Host "No postern winget manifest changes to submit."
+            exit 0
+          }
+
+          $commitJson = @{
+            message="Update willibrandon.postern to $version [skip actions]"
+            tree=$newTreeSha
+            parents=@($forkRef)
+          } | ConvertTo-Json -Compress
+          $commitJson | Out-File -FilePath commit.json -Encoding utf8
+          $newCommit = gh api repos/willibrandon/winget-pkgs/git/commits -X POST --input commit.json
+          $newCommitSha = $newCommit | ConvertFrom-Json | Select-Object -ExpandProperty sha
+          Write-Host "New commit SHA: $newCommitSha"
+
+          Upsert-WingetBranch -Branch $branch -Sha $newCommitSha
+
+          $exists = "${{ steps.check.outputs.exists }}"
+          if ($exists -eq "true") {
+            $prTitle = "Update willibrandon.postern to $version"
+            $prBody = "## Description`n`nUpdate postern to version $version`n`n## Release notes`n`nhttps://github.com/willibrandon/postern/releases/tag/v$version"
+          } else {
+            $prTitle = "New package: willibrandon.postern $version"
+            $prBody = "## Description`n`nAdd postern version $version`n`n## Release notes`n`nhttps://github.com/willibrandon/postern/releases/tag/v$version"
+          }
+
+          New-WingetPullRequest -Branch $branch -Title $prTitle -Body $prBody
+
+  # The action in action.yml is used by its major version, so the tag for
+  # that major, v0 for now, moves to each release.
+  action:
+    name: Advance the GitHub Action major tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: publish
+    if: "!contains(github.ref_name, '-')"
+    permissions:
+      contents: write
+    steps:
+      - name: Point the major tag at this release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          case "$GITHUB_REF_NAME" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "Expected a release tag, got $GITHUB_REF_NAME" >&2; exit 1 ;;
+          esac
+          major="${GITHUB_REF_NAME%%.*}"
+          commit="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$GITHUB_REF_NAME" --jq '.object.sha')"
+          if [ "$(gh api "repos/$GITHUB_REPOSITORY/git/commits/$commit" --jq .sha 2>/dev/null)" = "" ]; then
+            # An annotated tag points at a tag object; the action wants the commit
+            commit="$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$commit" --jq '.object.sha')"
+          fi
+          if existing="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$major" --jq '.object.sha' 2>/dev/null)"; then
+            [ "$existing" = "$commit" ] || gh api --method PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/$major" -f sha="$commit" -F force=true >/dev/null
+          else
+            gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$major" -f sha="$commit" >/dev/null
+          fi
+          echo "$major now points at $commit"

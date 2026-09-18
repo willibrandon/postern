@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+- The server installs from a Homebrew tap, `brew install willibrandon/tap/postern`, from a
+  Scoop bucket, `scoop install postern` once willibrandon's bucket is added, and with winget,
+  `winget install willibrandon.postern`, whose MSI puts it in Program Files and on the PATH.
+  Each release bumps the tap and the bucket and opens the winget pull request itself. An
+  action, `willibrandon/postern@v0`, fetches the release for the runner and runs `check` with
+  an annotation on every line the server would refuse, and a pre-commit hook in this repository
+  checks the four files before they are committed.
 - Every package can get the server without the releases page. `scripts/install.sh` and
   `scripts/install.ps1` fetch the binary for the platform from a release, check it against the
   checksums the release carries and put it on the path, and each release attaches them. The

@@ -41,3 +41,6 @@ postern-*.tar
 # Emacs lock and auto-save files
 .#*
 \#*#
+
+# The binary the pre-commit hook fetches into a checkout
+.postern/

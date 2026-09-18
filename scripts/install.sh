@@ -6,7 +6,7 @@
 # Options: --dir DIR for where the binary goes, $HOME/.local/bin without it,
 # and --version X.Y.Z for a release other than the latest. The checksum the
 # release carries is verified before the binary is put in place, and the path
-# is printed at the end.
+# is printed at the end. Under Git Bash on Windows it fetches the .exe.
 set -eu
 
 dir="${POSTERN_INSTALL_DIR:-$HOME/.local/bin}"
@@ -22,6 +22,7 @@ done
 case "$(uname -s)" in
   Linux) os=linux ;;
   Darwin) os=darwin ;;
+  MINGW* | MSYS* | CYGWIN*) os=win32 ;;
   *) echo "postern has no release for $(uname -s); see https://github.com/willibrandon/postern/releases" >&2; exit 1 ;;
 esac
 case "$(uname -m)" in
@@ -36,7 +37,9 @@ if [ -z "$version" ]; then
 fi
 [ -n "$version" ] || { echo "could not find the latest release" >&2; exit 1; }
 
-asset="postern-$version-$os-$arch"
+name=postern
+if [ "$os" = win32 ]; then name=postern.exe; fi
+asset="postern-$version-$os-$arch${name#postern}"
 base="https://github.com/willibrandon/postern/releases/download/v$version"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
@@ -53,5 +56,5 @@ curl -fsSL -o "$tmp/SHA256SUMS" "$base/SHA256SUMS"
 )
 
 mkdir -p "$dir"
-install -m 755 "$tmp/$asset" "$dir/postern"
-echo "$dir/postern"
+install -m 755 "$tmp/$asset" "$dir/$name"
+echo "$dir/$name"

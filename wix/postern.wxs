@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The postern Windows installer, built with WiX v5 by the release workflow.
+
+  The UpgradeCode stays the same across every version, A21D7539-5827-4EFC-B92F-232646B2DA00, and the
+  ProductCode is generated on each build, which MajorUpgrade needs to replace
+  the version already installed. Version and SourceDir come from the build's
+  -d options, and the Files element harvests SourceDir, so heat is not needed.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+
+  <Package Name="postern"
+           Version="$(var.Version).0"
+           Manufacturer="willibrandon"
+           UpgradeCode="A21D7539-5827-4EFC-B92F-232646B2DA00"
+           Scope="perMachine">
+
+    <SummaryInformation Description="Language server and checker for PostgreSQL configuration files" />
+
+    <!-- The icon Add/Remove Programs shows -->
+    <Icon Id="postern.ico" SourceFile="wix\postern.ico" />
+    <Property Id="ARPPRODUCTICON" Value="postern.ico" />
+
+    <!-- An older version is removed before the new one is installed -->
+    <MajorUpgrade DowngradeErrorMessage="A newer version of postern is already installed."
+                  AllowSameVersionUpgrades="yes" />
+
+    <!-- One MSI file, with the cabinet inside it -->
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <!-- Program Files\postern, on the system PATH -->
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="postern">
+        <Component Id="PathEnvComponent" Guid="10B45B84-1E7C-49E4-9FF8-2196EE6885D8">
+          <RegistryValue Root="HKLM"
+                         Key="Software\postern"
+                         Name="PathConfigured"
+                         Type="integer"
+                         Value="1"
+                         KeyPath="yes" />
+          <Environment Id="PATH"
+                       Name="PATH"
+                       Value="[INSTALLFOLDER]"
+                       Permanent="no"
+                       Part="last"
+                       Action="set"
+                       System="yes" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+
+    <Feature Id="MainFeature" Title="postern" Level="1">
+      <Files Directory="INSTALLFOLDER" Include="$(var.SourceDir)\**" />
+      <ComponentRef Id="PathEnvComponent" />
+    </Feature>
+
+  </Package>
+</Wix>

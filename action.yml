@@ -1,0 +1,87 @@
+name: Postern
+description: Checks postgresql.conf, pg_hba.conf and pg_ident.conf the way the PostgreSQL server reads them, with an annotation on each line it would refuse.
+author: willibrandon
+branding:
+  icon: check-circle
+  color: blue
+inputs:
+  files:
+    description: The files to check, separated by spaces or newlines. A root such as postgresql.conf checks every file it includes. Without it, every postgresql.conf, postgresql.auto.conf, pg_hba.conf and pg_ident.conf in the checkout.
+    required: false
+    default: ""
+  pg:
+    description: The PostgreSQL major version to check against, 13 to 18. The newest without it.
+    required: false
+    default: ""
+  strict:
+    description: Fail on a warning as well as an error.
+    required: false
+    default: "false"
+  connection-string:
+    description: A postgres:// URL of a running server to compare the files with, the way the editor does.
+    required: false
+    default: ""
+  version:
+    description: The postern release to fetch, such as 0.2.1, or latest.
+    required: false
+    default: latest
+  path:
+    description: A postern binary to run instead of fetching a release.
+    required: false
+    default: ""
+runs:
+  using: composite
+  steps:
+    - name: Fetch postern
+      if: inputs.path == '' && runner.os != 'Windows'
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+      run: |
+        set -eu
+        if [ "$VERSION" = latest ]; then
+          path=$(sh "$GITHUB_ACTION_PATH/scripts/install.sh" --dir "$RUNNER_TEMP/postern")
+        else
+          path=$(sh "$GITHUB_ACTION_PATH/scripts/install.sh" --dir "$RUNNER_TEMP/postern" --version "$VERSION")
+        fi
+        echo "POSTERN=$path" >> "$GITHUB_ENV"
+    - name: Fetch postern
+      if: inputs.path == '' && runner.os == 'Windows'
+      shell: pwsh
+      env:
+        VERSION: ${{ inputs.version }}
+      run: |
+        $params = @{ Dir = "$env:RUNNER_TEMP/postern" }
+        if ($env:VERSION -ne "latest") { $params.Version = $env:VERSION }
+        $path = & "$env:GITHUB_ACTION_PATH/scripts/install.ps1" @params
+        "POSTERN=$path" >> $env:GITHUB_ENV
+    - name: Use the given postern
+      if: inputs.path != ''
+      shell: bash
+      env:
+        BINARY: ${{ inputs.path }}
+      run: echo "POSTERN=$BINARY" >> "$GITHUB_ENV"
+    - name: Check the configuration files
+      shell: bash
+      env:
+        FILES: ${{ inputs.files }}
+        PG: ${{ inputs.pg }}
+        STRICT: ${{ inputs.strict }}
+        CONNECTION_STRING: ${{ inputs.connection-string }}
+      run: |
+        set -eu
+        set -- check --format github
+        if [ -n "$PG" ]; then set -- "$@" --pg "$PG"; fi
+        if [ "$STRICT" = true ]; then set -- "$@" --strict; fi
+        if [ -n "$CONNECTION_STRING" ]; then set -- "$@" --connection-string "$CONNECTION_STRING"; fi
+        if [ -n "$FILES" ]; then
+          files=$(printf '%s' "$FILES" | tr '\n' ' ')
+        else
+          files=$(git ls-files -- '*postgresql.conf' '*postgresql.auto.conf' '*pg_hba.conf' '*pg_ident.conf' | tr '\n' ' ')
+        fi
+        if [ -z "${files// /}" ]; then
+          echo "No postgresql.conf, postgresql.auto.conf, pg_hba.conf or pg_ident.conf to check."
+          exit 0
+        fi
+        # shellcheck disable=SC2086
+        "$POSTERN" "$@" $files

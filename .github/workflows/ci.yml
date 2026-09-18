@@ -101,6 +101,40 @@ jobs:
           path: burrito_out/postern_linux_x86_64
           if-no-files-found: error
 
+  # The action in action.yml, run on the binary the job above built, once on
+  # a file the server accepts and once on a file it refuses.
+  action:
+    name: GitHub Action
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: binary
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: postern-linux-x64
+          path: artifacts
+      - run: chmod 755 artifacts/postern_linux_x86_64
+      - name: Check a file the server accepts
+        uses: ./
+        with:
+          path: artifacts/postern_linux_x86_64
+          files: test/fixtures/pg_hba.conf
+      - name: Check a file the server refuses
+        id: refused
+        continue-on-error: true
+        uses: ./
+        with:
+          path: artifacts/postern_linux_x86_64
+          files: editors/vscode/test/fixtures/postgresql.conf
+          pg: "17"
+      - name: Expect the refused check to fail
+        env:
+          OUTCOME: ${{ steps.refused.outcome }}
+        run: test "$OUTCOME" = failure
+
   extension:
     name: VS Code extension
     runs-on: ubuntu-latest
