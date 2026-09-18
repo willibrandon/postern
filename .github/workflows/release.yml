@@ -263,6 +263,7 @@ jobs:
         with:
           name: vsix
           path: artifacts/release
+      - run: cp scripts/install.sh scripts/install.ps1 artifacts/release/
       - name: Attest build provenance
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
@@ -318,3 +319,28 @@ jobs:
           push-to: willibrandon/extensions
         env:
           COMMITTER_TOKEN: ${{ secrets.COMMITTER_TOKEN }}
+
+  # The Neovim plugin lives in editors/nvim and is published on its own as
+  # willibrandon/postern.nvim, which a plugin manager takes by name. The
+  # release pushes the directory's history there, as the branch main and
+  # the release tag, with a token that can write to that repository. The
+  # history is split from this one, so the push replaces what is there.
+  nvim:
+    name: Publish the Neovim plugin
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: publish
+    if: "!contains(github.ref_name, '-')"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Push editors/nvim to postern.nvim
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          split="$(git subtree split --prefix editors/nvim "$GITHUB_REF_NAME")"
+          remote="https://x-access-token:${{ secrets.POSTERN_NVIM_TOKEN }}@github.com/willibrandon/postern.nvim.git"
+          git push --force "$remote" "$split:refs/heads/main"
+          git push "$remote" "$split:refs/tags/$GITHUB_REF_NAME"

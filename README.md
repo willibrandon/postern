@@ -50,7 +50,20 @@ log would show after a reload, hint included.
 
 ## Install
 
-Download a binary for your platform from the
+The install script fetches the binary for your platform from the latest release, checks it
+against the checksums the release carries, and puts it in `~/.local/bin`, or where `--dir` says:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/willibrandon/postern/main/scripts/install.sh | sh
+```
+
+On Windows, in PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/willibrandon/postern/main/scripts/install.ps1 | iex
+```
+
+Or download a binary for your platform from the
 [releases page](https://github.com/willibrandon/postern/releases) and put it on your `PATH` as
 `postern`. The binary is self-contained; it unpacks the Erlang runtime into your user data
 directory on first run.
@@ -62,16 +75,17 @@ or [Open VSX](https://open-vsx.org/extension/willibrandon/postern). It bundles t
 
 ### Neovim
 
-Neovim 0.11 or newer. Put `editors/nvim` from a checkout on the runtime path, for example with
-lazy.nvim:
+Neovim 0.11 or newer. The plugin is
+[willibrandon/postern.nvim](https://github.com/willibrandon/postern.nvim); with lazy.nvim:
 
 ```lua
-{ dir = "~/src/postern/editors/nvim" }
+{ "willibrandon/postern.nvim" }
 ```
 
-It gives the four files their filetypes, enables the server, which must be on your `PATH`, and
-registers the [tree-sitter grammar](https://github.com/willibrandon/tree-sitter-postgresql-conf)
-so `:TSInstall postgresql_conf` gives them highlighting and text objects. See
+It gives the four files their filetypes, enables the server, `postern` on your `PATH` or the
+binary `:PosternInstall` fetches from the latest release, and registers the
+[tree-sitter grammar](https://github.com/willibrandon/tree-sitter-postgresql-conf) so
+`:TSInstall postgresql_conf` gives them highlighting and text objects. See
 [editors/nvim/README.md](editors/nvim/README.md).
 
 ### Fresh
@@ -89,7 +103,8 @@ its queries under `runtime/queries/postgresql-conf`, then `hx --grammar fetch` a
 ### Emacs
 
 Emacs 29.1 or newer. Load `editors/emacs` and require `postgresql-conf-ts-mode`; it owns the four
-files, highlights them through the tree-sitter grammar, and registers the server with Eglot. See
+files, highlights them through the tree-sitter grammar, and registers the server with Eglot,
+`postern` on your `PATH` or the binary `M-x postgresql-conf-ts-mode-install-server` fetches. See
 [editors/emacs/README.md](editors/emacs/README.md).
 
 ### Zed

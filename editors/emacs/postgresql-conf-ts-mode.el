@@ -193,11 +193,95 @@ Eglot runs the Postern language server."
 (add-to-list 'magic-mode-alist
              (cons (rx bos "#" (* blank) "postern:") #'postgresql-conf-ts-mode))
 
+(require 'subr-x)
+
+(defcustom postgresql-conf-ts-mode-server-directory
+  (expand-file-name "postern" user-emacs-directory)
+  "Where `postgresql-conf-ts-mode-install-server' puts the server binary."
+  :type 'directory
+  :group 'postgresql-conf-ts-mode)
+
+(defun postgresql-conf-ts-mode--installed-server ()
+  "The path of the server `postgresql-conf-ts-mode-install-server' fetches."
+  (expand-file-name (if (eq system-type 'windows-nt) "postern.exe" "postern")
+                    postgresql-conf-ts-mode-server-directory))
+
+(defun postgresql-conf-ts-mode-server-program (&optional _interactive)
+  "The command Eglot starts the server with.
+`postern' on the PATH when it is there, otherwise the binary
+`postgresql-conf-ts-mode-install-server' fetched, otherwise `postern'
+for Eglot to report as missing."
+  (cond ((executable-find "postern") '("postern"))
+        ((file-executable-p (postgresql-conf-ts-mode--installed-server))
+         (list (postgresql-conf-ts-mode--installed-server)))
+        (t '("postern"))))
+
+(defun postgresql-conf-ts-mode--release-asset (version)
+  "The release asset name for this platform at VERSION."
+  (let ((system (pcase system-type
+                  ('gnu/linux "linux")
+                  ('darwin "darwin")
+                  ('windows-nt "win32")
+                  (_ (user-error "Postern has no release for %s" system-type))))
+        (arch (pcase (car (split-string system-configuration "-"))
+                ((or "x86_64" "amd64") "x64")
+                ((or "aarch64" "arm64") "arm64")
+                (other (user-error "Postern has no release for %s" other)))))
+    (format "postern-%s-%s-%s%s" version system arch
+            (if (eq system-type 'windows-nt) ".exe" ""))))
+
+(defun postgresql-conf-ts-mode--fetch (url file)
+  "Download URL to FILE, signalling an error when it cannot be."
+  (unless (url-copy-file url file t)
+    (user-error "Could not fetch %s" url)))
+
+(defun postgresql-conf-ts-mode--latest-version ()
+  "The version of the latest release on GitHub."
+  (with-temp-buffer
+    (url-insert-file-contents "https://api.github.com/repos/willibrandon/postern/releases/latest")
+    (string-remove-prefix "v" (gethash "tag_name" (json-parse-buffer)))))
+
+;;;###autoload
+(defun postgresql-conf-ts-mode-install-server (&optional version)
+  "Fetch the server binary for this platform from a GitHub release.
+The latest release, or VERSION such as \"0.2.1\" with a prefix argument.
+The checksum the release carries is verified, and the binary goes into
+`postgresql-conf-ts-mode-server-directory', which Eglot uses when
+`postern' is not on the PATH."
+  (interactive (list (and current-prefix-arg (read-string "Version: "))))
+  (let* ((version (or version (postgresql-conf-ts-mode--latest-version)))
+         (asset (postgresql-conf-ts-mode--release-asset version))
+         (base (format "https://github.com/willibrandon/postern/releases/download/v%s" version))
+         (dir postgresql-conf-ts-mode-server-directory)
+         (part (expand-file-name (concat asset ".part") dir))
+         (sums (expand-file-name "SHA256SUMS" dir))
+         (path (postgresql-conf-ts-mode--installed-server)))
+    (make-directory dir t)
+    (postgresql-conf-ts-mode--fetch (concat base "/" asset) part)
+    (postgresql-conf-ts-mode--fetch (concat base "/SHA256SUMS") sums)
+    (let ((expected (with-temp-buffer
+                      (insert-file-contents sums)
+                      (and (re-search-forward (concat "^\\([0-9a-f]+\\) +\\*?" (regexp-quote asset) "$") nil t)
+                           (match-string 1))))
+          (actual (with-temp-buffer
+                    (set-buffer-multibyte nil)
+                    (insert-file-contents-literally part)
+                    (secure-hash 'sha256 (current-buffer)))))
+      (unless (equal expected actual)
+        (delete-file part)
+        (user-error "The checksum of %s does not match the release's SHA256SUMS" asset)))
+    (rename-file part path t)
+    (set-file-modes path #o755)
+    (delete-file sums)
+    (message "Postern: installed %s" path)
+    path))
+
 (defvar eglot-server-programs)
 
 ;;;###autoload
 (with-eval-after-load 'eglot
-  (add-to-list 'eglot-server-programs '(postgresql-conf-ts-mode . ("postern"))))
+  (add-to-list 'eglot-server-programs
+               '(postgresql-conf-ts-mode . postgresql-conf-ts-mode-server-program)))
 
 (provide 'postgresql-conf-ts-mode)
 ;;; postgresql-conf-ts-mode.el ends here

@@ -82,7 +82,26 @@
 
 (ert-deftest postgresql-conf-ts-mode-registers-the-server-with-eglot ()
   (require 'eglot)
-  (should (equal (alist-get 'postgresql-conf-ts-mode eglot-server-programs) '("postern"))))
+  (should (eq (alist-get 'postgresql-conf-ts-mode eglot-server-programs)
+              'postgresql-conf-ts-mode-server-program)))
+
+(ert-deftest postgresql-conf-ts-mode-names-the-server-on-the-path-or-the-fetched-one ()
+  (let ((program (postgresql-conf-ts-mode-server-program)))
+    (should (listp program))
+    (should (stringp (car program)))
+    (should (string-match-p "postern" (car program))))
+  (let ((postgresql-conf-ts-mode-server-directory (make-temp-file "postern-test" t)))
+    (let ((path (postgresql-conf-ts-mode--installed-server)))
+      (with-temp-file path (insert "#!/bin/sh\n"))
+      (set-file-modes path #o755)
+      (if (executable-find "postern")
+          (should (equal (postgresql-conf-ts-mode-server-program) '("postern")))
+        (should (equal (postgresql-conf-ts-mode-server-program) (list path)))))))
+
+(ert-deftest postgresql-conf-ts-mode-names-the-release-asset-for-this-platform ()
+  (let ((asset (postgresql-conf-ts-mode--release-asset "0.2.1")))
+    (should (string-prefix-p "postern-0.2.1-" asset))
+    (should (string-match-p "-\\(linux\\|darwin\\|win32\\)-\\(x64\\|arm64\\)" asset))))
 
 (provide 'postgresql-conf-ts-mode-test)
 ;;; postgresql-conf-ts-mode-test.el ends here

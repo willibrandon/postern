@@ -1,6 +1,6 @@
 Postern for Fresh is a bundle for [Fresh](https://github.com/sinelaw/fresh) 0.4.10 or newer. It highlights `postgresql.conf`, `postgresql.auto.conf`, `pg_hba.conf` and `pg_ident.conf` and starts the [Postern](https://github.com/willibrandon/postern) language server for them, which adds diagnostics, hover, completion, inlay hints and code actions.
 
-Install it with `Package: Install from URL` using https://github.com/willibrandon/postern#editors/fresh. The server is not bundled. Download a binary from the [releases page](https://github.com/willibrandon/postern/releases) and put it on your `PATH` as `postern`, or name its location in `config.json`:
+Install it with `Package: Install from URL` using https://github.com/willibrandon/postern#editors/fresh. The server is not bundled. The install script fetches the binary for your platform from the latest release and puts it in `~/.local/bin`, `curl -fsSL https://raw.githubusercontent.com/willibrandon/postern/main/scripts/install.sh | sh`, or download one from the [releases page](https://github.com/willibrandon/postern/releases); put it on your `PATH` as `postern`, or name its location in `config.json`:
 
 ```json
 { "lsp": { "postgresql-conf": { "command": "/path/to/postern" } } }

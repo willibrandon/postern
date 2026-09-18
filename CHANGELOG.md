@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+- Every package can get the server without the releases page. `scripts/install.sh` and
+  `scripts/install.ps1` fetch the binary for the platform from a release, check it against the
+  checksums the release carries and put it on the path, and each release attaches them. The
+  Neovim plugin's `:PosternInstall` and the Emacs mode's `postgresql-conf-ts-mode-install-server`
+  do the same into their editor's own directory and use the binary from then on, `postern` on
+  the `PATH` coming first; the Helix and Fresh notes point at the script. The Neovim plugin is
+  also published on its own as `willibrandon/postern.nvim`, which a plugin manager takes by name,
+  and a release pushes it there.
 - The server halts the moment its editor is gone, whichever way it goes. A write that
   failed because the editor had closed its end of stdout took OTP's tty driver and the
   `user` process down with it, so the read waiting on stdin was never answered and the
