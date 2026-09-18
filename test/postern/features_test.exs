@@ -19,6 +19,32 @@ defmodule Postern.FeaturesTest do
     assert value =~ "takes effect after a server restart"
   end
 
+  test "hover says a file cannot change an internal setting, and completion leaves it out" do
+    %{contents: %{value: value}} =
+      Features.hover(
+        "file:///tmp/postgresql.conf",
+        "block_size = 8192\n",
+        %Position{line: 0, character: 3},
+        %{
+          "pg" => 18
+        }
+      )
+
+    assert value =~ "A configuration file cannot change it"
+
+    %{items: items} =
+      Features.completion(
+        "file:///tmp/postgresql.conf",
+        "block\n",
+        %Position{line: 0, character: 5},
+        %{
+          "pg" => 18
+        }
+      )
+
+    refute "block_size" in Enum.map(items, & &1.label)
+  end
+
   test "hover lists enum values without the literal's quotes" do
     text = "default_transaction_isolation = 'read committed'\n"
     position = %Position{line: 0, character: 3}

@@ -134,6 +134,18 @@ defmodule Postern.PostgresqlConfDiagnosticsTest do
     end
   end
 
+  test "a setting with the internal context cannot be changed, whatever its value" do
+    for line <- ["block_size = 8192", "block_size = abc", "data_checksums = on"] do
+      [diagnostic] =
+        Diagnostics.for_document("file:///tmp/postgresql.conf", line <> "\n", %{"pg" => 18})
+
+      [name | _] = String.split(line)
+      assert diagnostic.message == ~s(parameter "#{name}" cannot be changed)
+      assert diagnostic.range.start.character == 0
+      assert diagnostic.range.end.character == String.length(name)
+    end
+  end
+
   test "the bounds carry no unit before 17" do
     [diagnostic] =
       Diagnostics.for_document("file:///tmp/postgresql.conf", "work_mem = 1kB\n", %{"pg" => 16})

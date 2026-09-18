@@ -120,6 +120,20 @@ defmodule Postern.PostgresqlConfDiagnostics do
     end
   end
 
+  # A setting with the internal context, fixed by the build, by initdb or by
+  # the server itself, is refused whatever its value, and the value is not
+  # looked at, as set_config_option does not look at it.
+  defp setting_diagnostics(
+         entry,
+         %{"context" => "internal"} = setting,
+         _name,
+         _versions,
+         _catalog
+       ),
+       do: [
+         diagnostic(entry.name_span, @error, ~s(parameter "#{setting["name"]}" cannot be changed))
+       ]
+
   defp setting_diagnostics(entry, setting, _name, _versions, catalog) do
     case validate_value(entry.value, setting, catalog.version) do
       :ok -> []

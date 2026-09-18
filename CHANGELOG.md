@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- A setting with the internal context, `block_size` or `data_checksums` say, is an error on its
+  name in the server's words, `parameter "block_size" cannot be changed`, whatever its value.
+  The build, initdb or the server itself fixed it, which the hover now says, and completion no
+  longer offers it.
 - A number, its unit and a boolean are read the way guc.c reads them. A leading `0` is octal
   and `0x` is hex, so `log_file_mode = 0600` and `unix_socket_permissions = 0777` are the
   values the manual gives rather than errors; a fraction rounds to the nearest integer; white

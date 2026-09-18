@@ -170,9 +170,16 @@ defmodule Postern.Features do
       |> Enum.join("  \n")
 
     note =
-      if setting["context"] == "postmaster",
-        do: "\n\nA change takes effect after a server restart.",
-        else: ""
+      case setting["context"] do
+        "postmaster" ->
+          "\n\nA change takes effect after a server restart."
+
+        "internal" ->
+          "\n\nA configuration file cannot change it: the build, initdb or the server itself fixed it."
+
+        _other ->
+          ""
+      end
 
     "### `#{setting["name"]}`\n\n#{description}\n\n#{details}#{note}"
   end
@@ -256,8 +263,10 @@ defmodule Postern.Features do
           Postern.PostgresqlConfDiagnostics.target_version(text, options, Catalog.versions())
 
         Catalog.load(version).settings
-        |> Map.keys()
+        |> Enum.reject(fn {_name, setting} -> setting["context"] == "internal" end)
+        |> Enum.map(fn {name, _setting} -> name end)
         |> Enum.filter(&String.starts_with?(String.downcase(&1), String.downcase(prefix)))
+        |> Enum.sort()
         |> Enum.map(&completion_item(&1, CompletionItemKind.keyword(), "PostgreSQL setting"))
     end
   end
