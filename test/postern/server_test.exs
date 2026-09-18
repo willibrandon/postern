@@ -146,6 +146,47 @@ defmodule Postern.ServerTest do
       assert "postern.reloadConfig" in commands
     end
 
+    test "a quick fix is offered for a postgresql.conf line without diagnostics in the request",
+         %{client: client} do
+      uri = "file:///etc/postgresql.conf"
+
+      notify(client, %{
+        "jsonrpc" => "2.0",
+        "method" => "textDocument/didOpen",
+        "params" => %{
+          "textDocument" => %{
+            "uri" => uri,
+            "languageId" => "postgresql-conf",
+            "version" => 1,
+            "text" => "shared_buffrs = 128MB\n"
+          }
+        }
+      })
+
+      assert_notification("textDocument/publishDiagnostics", %{"uri" => ^uri})
+
+      request(client, %{
+        "jsonrpc" => "2.0",
+        "id" => 306,
+        "method" => "textDocument/codeAction",
+        "params" => %{
+          "textDocument" => %{"uri" => uri},
+          "range" => %{
+            "start" => %{"line" => 0, "character" => 2},
+            "end" => %{"line" => 0, "character" => 2}
+          },
+          "context" => %{"diagnostics" => []}
+        }
+      })
+
+      assert_result(306, [
+        %{
+          "title" => "Replace with shared_buffers",
+          "edit" => %{"changes" => %{^uri => [%{"newText" => "shared_buffers"}]}}
+        }
+      ])
+    end
+
     test "a live command's outcome comes back as a message the editor shows", %{client: client} do
       request(client, %{
         "jsonrpc" => "2.0",

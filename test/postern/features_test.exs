@@ -139,6 +139,34 @@ defmodule Postern.FeaturesTest do
              Enum.find(items, &(&1.label == "pg_stat_statements.max"))
   end
 
+  test "a fix becomes a code action with the edit that makes it" do
+    uri = "file:///tmp/postgresql.conf"
+
+    text =
+      "shared_buffrs = 128MB\nwork_mem = 128mb\nlog_directory = /var/log\nport = 1\nport = 2\n"
+
+    diagnostics = Postern.Diagnostics.for_document(uri, text, %{"pg" => 18})
+    actions = Features.code_actions(diagnostics, uri)
+
+    edits =
+      Enum.map(actions, fn action ->
+        [edit] = action.edit.changes[uri]
+
+        {action.title, edit.range.start.line, edit.range.start.character, edit.range.end.line,
+         edit.range.end.character, edit.new_text}
+      end)
+
+    assert edits == [
+             {"Replace with shared_buffers", 0, 0, 0, 13, "shared_buffers"},
+             {"Replace with 128MB", 1, 11, 1, 16, "128MB"},
+             {"Quote the value", 2, 16, 2, 24, "'/var/log'"},
+             {"Remove the line", 3, 0, 4, 0, ""},
+             {"Comment out the line", 3, 0, 3, 0, "#"}
+           ]
+
+    assert Enum.all?(actions, &(&1.kind == "quickfix" and &1.diagnostics != []))
+  end
+
   describe "between map= and the map in pg_ident.conf" do
     @hba "host all all 10.0.0.0/8 cert map=ops\nhost all all 10.0.0.0/8 peer map=\"ops\" clientcert=verify-full\nhost all all 10.0.0.0/8 peer map=missing\n"
     @ident "ops alice alice\nops bob bob\nother carol carol\n"
@@ -657,9 +685,9 @@ defmodule Postern.FeaturesTest do
     assert hint.code == "trust"
 
     assert [%{title: title, command: %{command: "postern.disableTrustHints"}}] =
-             Features.code_actions([hint])
+             Features.code_actions([hint], "file:///pg/pg_hba.conf")
 
     assert title =~ "trust"
-    assert Features.code_actions([%{hint | code: nil}]) == []
+    assert Features.code_actions([%{hint | code: nil}], "file:///pg/pg_hba.conf") == []
   end
 end

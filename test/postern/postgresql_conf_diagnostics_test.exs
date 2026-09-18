@@ -309,6 +309,76 @@ defmodule Postern.PostgresqlConfDiagnosticsTest do
            }) == []
   end
 
+  test "a diagnostic that knows the answer carries it as a fix" do
+    fix = fn line ->
+      [diagnostic] =
+        Diagnostics.for_document("file:///tmp/postgresql.conf", line <> "\n", %{"pg" => 18})
+
+      diagnostic.data
+    end
+
+    assert fix.("shared_buffrs = 128MB") == %{
+             "fix" => "replace",
+             "line" => 0,
+             "start" => 0,
+             "end" => 13,
+             "text" => "shared_buffers"
+           }
+
+    assert fix.("force_parallel_mode = on") == %{
+             "fix" => "replace",
+             "line" => 0,
+             "start" => 0,
+             "end" => 19,
+             "text" => "debug_parallel_query"
+           }
+
+    assert fix.("work_mem = 128mb") == %{
+             "fix" => "replace",
+             "line" => 0,
+             "start" => 11,
+             "end" => 16,
+             "text" => "128MB"
+           }
+
+    assert fix.("work_mem = '64 mb'") == %{
+             "fix" => "replace",
+             "line" => 0,
+             "start" => 11,
+             "end" => 18,
+             "text" => "'64 MB'"
+           }
+
+    assert fix.("search_path = \"$user\", public") == %{
+             "fix" => "quote",
+             "line" => 0,
+             "start" => 14,
+             "end" => 29,
+             "text" => "'\"$user\", public'"
+           }
+
+    assert fix.("log_directory = /var/log") == %{
+             "fix" => "quote",
+             "line" => 0,
+             "start" => 16,
+             "end" => 24,
+             "text" => "'/var/log'"
+           }
+
+    assert fix.("block_size = 8192") == %{"fix" => "line", "line" => 0}
+    assert fix.("a.b.c = 1") == nil
+    assert fix.("zzzz = 1") == nil
+
+    [override, _winner] =
+      Diagnostics.for_document("file:///tmp/postgresql.conf", "port = 1\nport = 2\n", %{
+        "pg" => 18
+      })
+      |> Enum.sort_by(& &1.range.start.line)
+      |> Kernel.++([nil])
+
+    assert override.data == %{"fix" => "line", "line" => 0}
+  end
+
   test "a setting with the internal context cannot be changed, whatever its value" do
     for line <- ["block_size = 8192", "block_size = abc", "data_checksums = on"] do
       [diagnostic] =

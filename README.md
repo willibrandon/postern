@@ -39,6 +39,8 @@ log would show after a reload, hint included.
 - `pg_hba.conf` rules that an earlier rule shadows, options that do not apply to the method, a
   file of names given with `@` that the server could not open, a regular expression its engine
   refuses, and ident maps that are missing or unused.
+- Quick fixes: the name the server would know, a unit spelled its way, a value quoted, and
+  the line an override or an internal setting makes useless removed or commented out.
 - An outline of the file for the editor's symbol views: sections and their settings, rules,
   and maps with their mappings.
 - Hover with the setting's description, default and range, and on `pg_hba.conf` and

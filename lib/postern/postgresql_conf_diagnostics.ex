@@ -61,10 +61,37 @@ defmodule Postern.PostgresqlConfDiagnostics do
     end
   end
 
+  # A line the scanner refuses at its value can usually be read once the
+  # value is quoted, so the error carries that fix.
   defp parse_diagnostics(entries) do
     entries
     |> Enum.filter(&(&1.type == :error))
-    |> Enum.map(&diagnostic(&1.span, @error, &1.message))
+    |> Enum.map(fn entry ->
+      with_data(diagnostic(entry.span, @error, entry.message), quote_fix(entry))
+    end)
+  end
+
+  defp quote_fix(%{raw: raw, span: %{line: line, col: col}}) do
+    case Regex.run(
+           ~r/^(\s*[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?\s*=?\s*)([^'#\s][^#]*?)(\s*(?:#.*)?)$/,
+           raw
+         ) do
+      [_all, head, value, _tail] ->
+        start = String.length(head)
+
+        if col > start do
+          %{
+            "fix" => "quote",
+            "line" => line - 1,
+            "start" => start,
+            "end" => start + String.length(value),
+            "text" => "'" <> String.replace(value, "'", "''") <> "'"
+          }
+        end
+
+      _other ->
+        nil
+    end
   end
 
   defp value_diagnostics(entries, catalog, versions) do
@@ -99,9 +126,16 @@ defmodule Postern.PostgresqlConfDiagnostics do
 
     %{
       diagnostic(loser.entry.name_span, @hint, "overridden by a later entry #{where}")
-      | code: "override"
+      | code: "override",
+        data: line_fix(loser.entry.span)
     }
   end
+
+  # A line the file has no use for can go, or be kept as a comment.
+  defp line_fix(%{line: line}), do: %{"fix" => "line", "line" => line - 1}
+
+  defp with_data(diagnostic, nil), do: diagnostic
+  defp with_data(diagnostic, data), do: %{diagnostic | data: data}
 
   # What the postmaster would refuse at start, across the tree's winning
   # values, or the document's own when there is no tree.
@@ -142,16 +176,42 @@ defmodule Postern.PostgresqlConfDiagnostics do
          _name,
          _versions,
          _catalog
-       ),
-       do: [
-         diagnostic(entry.name_span, @error, ~s(parameter "#{setting["name"]}" cannot be changed))
-       ]
+       ) do
+    message = ~s(parameter "#{setting["name"]}" cannot be changed)
+    [with_data(diagnostic(entry.name_span, @error, message), line_fix(entry.span))]
+  end
 
   defp setting_diagnostics(entry, setting, _name, _versions, catalog) do
     case validate_value(entry.value, setting, catalog) do
-      :ok -> []
-      {:error, message} -> [diagnostic(entry.value_span, @error, message)]
+      :ok ->
+        []
+
+      {:error, message} ->
+        [with_data(diagnostic(entry.value_span, @error, message), unit_fix(entry, setting))]
     end
+  end
+
+  # A unit that differs from the server's spelling in case alone is
+  # rewritten the way the server takes it.
+  defp unit_fix(entry, %{"vartype" => type, "unit" => unit}) when type in ["integer", "real"] do
+    case GucValue.respelled(entry.value, GucValue.base(unit)) do
+      nil -> nil
+      value -> replace_value_fix(entry, value)
+    end
+  end
+
+  defp unit_fix(_entry, _setting), do: nil
+
+  defp replace_value_fix(%{value_span: span, quoted: quoted}, value) do
+    text = if quoted, do: "'" <> String.replace(value, "'", "''") <> "'", else: value
+
+    %{
+      "fix" => "replace",
+      "line" => span.line - 1,
+      "start" => span.col - 1,
+      "end" => span.end_col - 1,
+      "text" => text
+    }
   end
 
   defp placeholder_diagnostic(entry, name, catalog) do
@@ -185,15 +245,36 @@ defmodule Postern.PostgresqlConfDiagnostics do
   # closest catalog name, phrased the way the server phrases a hint.
   defp unknown_setting_diagnostic(entry, name, versions, target) do
     message = ~s(unrecognized configuration parameter "#{name}")
+    successor = SettingHistory.successor(name, target)
+    candidate = if successor, do: nil, else: suggestion(name, versions)
 
     message =
-      case SettingHistory.note(name, target) || suggestion(name, versions) do
+      case SettingHistory.note(name, target) ||
+             (candidate && ~s(Perhaps you meant "#{candidate}".)) do
         nil -> message
         note -> message <> "\n" <> note
       end
 
-    [diagnostic(entry.name_span, @error, message)]
+    [
+      with_data(
+        diagnostic(entry.name_span, @error, message),
+        name_fix(entry, successor || candidate)
+      )
+    ]
   end
+
+  # The name the closest catalog name, or the one that took its place, so
+  # that a quick fix can write it.
+  defp name_fix(_entry, nil), do: nil
+
+  defp name_fix(%{name_span: span}, name),
+    do: %{
+      "fix" => "replace",
+      "line" => span.line - 1,
+      "start" => span.col - 1,
+      "end" => span.end_col - 1,
+      "text" => name
+    }
 
   defp suggestion(name, versions) do
     versions
@@ -203,7 +284,7 @@ defmodule Postern.PostgresqlConfDiagnostics do
     |> Enum.sort_by(fn {score, candidate} -> {-score, candidate} end)
     |> Enum.find(fn {score, _candidate} -> score >= 0.80 end)
     |> case do
-      {_score, candidate} -> ~s(Perhaps you meant "#{candidate}".)
+      {_score, candidate} -> candidate
       nil -> nil
     end
   end

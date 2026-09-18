@@ -372,30 +372,100 @@ defmodule Postern.Features do
       else: []
   end
 
-  @doc "Quick fixes for diagnostics in the request context that carry one."
-  @spec code_actions([map()]) :: [CodeAction.t()]
-  def code_actions(diagnostics) do
-    if Enum.any?(diagnostics, &trust_diagnostic?/1) do
-      [
-        %CodeAction{
-          title: "Stop reporting trust on non-local rules",
-          kind: CodeActionKind.quick_fix(),
-          diagnostics: Enum.filter(diagnostics, &trust_diagnostic?/1),
-          command: %Command{
+  @doc """
+  Quick fixes for the diagnostics in the request context that carry one:
+  an edit for the name the server would know, the unit as the server
+  spells it, the value quoted, or the line an override or an internal
+  setting makes useless removed or kept as a comment; and the command that
+  stops the trust hints.
+  """
+  @spec code_actions([map()], String.t()) :: [CodeAction.t()]
+  def code_actions(diagnostics, uri) do
+    edits =
+      diagnostics
+      |> Enum.sort_by(&{&1.range.start.line, &1.range.start.character})
+      |> Enum.flat_map(&fix_actions(&1, uri))
+
+    trust =
+      if Enum.any?(diagnostics, &trust_diagnostic?/1) do
+        [
+          %CodeAction{
             title: "Stop reporting trust on non-local rules",
-            command: "postern.disableTrustHints",
-            arguments: []
+            kind: CodeActionKind.quick_fix(),
+            diagnostics: Enum.filter(diagnostics, &trust_diagnostic?/1),
+            command: %Command{
+              title: "Stop reporting trust on non-local rules",
+              command: "postern.disableTrustHints",
+              arguments: []
+            }
           }
-        }
-      ]
-    else
-      []
-    end
+        ]
+      else
+        []
+      end
+
+    edits ++ trust
   end
 
   @doc "Whether a diagnostic is the hint about trust on a non-local rule."
   def trust_diagnostic?(%{source: "postern", code: "trust"}), do: true
   def trust_diagnostic?(_diagnostic), do: false
+
+  @doc "Whether a diagnostic carries a fix or the trust hint, so that a code action can come from it."
+  def actionable?(%{data: %{}} = diagnostic), do: diagnostic.source == "postern"
+  def actionable?(diagnostic), do: trust_diagnostic?(diagnostic)
+
+  defp fix_actions(%{data: %{"fix" => "replace"} = fix} = diagnostic, uri) do
+    [
+      edit_action(
+        ~s(Replace with #{fix["text"]}),
+        diagnostic,
+        uri,
+        fix["line"],
+        fix["start"],
+        fix["end"],
+        fix["text"]
+      )
+    ]
+  end
+
+  defp fix_actions(%{data: %{"fix" => "quote"} = fix} = diagnostic, uri) do
+    [
+      edit_action(
+        "Quote the value",
+        diagnostic,
+        uri,
+        fix["line"],
+        fix["start"],
+        fix["end"],
+        fix["text"]
+      )
+    ]
+  end
+
+  defp fix_actions(%{data: %{"fix" => "line", "line" => line}} = diagnostic, uri) do
+    [
+      edit_action("Remove the line", diagnostic, uri, line, 0, 0, "", line + 1),
+      edit_action("Comment out the line", diagnostic, uri, line, 0, 0, "#")
+    ]
+  end
+
+  defp fix_actions(_diagnostic, _uri), do: []
+
+  defp edit_action(title, diagnostic, uri, line, from, to, text, end_line \\ nil) do
+    range = %Range{
+      start: %Position{line: line, character: from},
+      end: %Position{line: end_line || line, character: to}
+    }
+
+    %CodeAction{
+      title: title,
+      kind: CodeActionKind.quick_fix(),
+      diagnostics: [diagnostic],
+      is_preferred: true,
+      edit: %WorkspaceEdit{changes: %{uri => [%TextEdit{range: range, new_text: text}]}}
+    }
+  end
 
   @doc """
   Every command a code action can carry. Advertised at initialize, because

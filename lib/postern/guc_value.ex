@@ -174,6 +174,41 @@ defmodule Postern.GucValue do
   end
 
   @doc """
+  The value with its unit spelled the way the server takes it, when the
+  unit differs from one of the base's units in case alone, or `nil`.
+
+  ## Examples
+
+      iex> Postern.GucValue.respelled("128mb", {:memory, :kb})
+      "128MB"
+
+      iex> Postern.GucValue.respelled("10 Min", {:time, :ms})
+      "10 min"
+
+      iex> Postern.GucValue.respelled("128MB", {:memory, :kb})
+      nil
+
+  """
+  @spec respelled(String.t(), base()) :: String.t() | nil
+  def respelled(_value, nil), do: nil
+
+  def respelled(value, {dimension, base}) do
+    table = if dimension == :memory, do: @memory_table, else: @time_table
+
+    with [_all, number, space, unit, trailing] <-
+           Regex.run(~r/^(\s*[+-]?[0-9A-Fa-fxX.]+)(\s*)([A-Za-z]{1,3})(\s*)$/, value),
+         {canonical, _multiplier} <-
+           Enum.find(Map.fetch!(table, base), fn {name, _m} ->
+             String.downcase(name) == String.downcase(unit)
+           end),
+         true <- canonical != unit do
+      number <> space <> canonical <> trailing
+    else
+      _ -> nil
+    end
+  end
+
+  @doc """
   A number the way C's `%g` prints it, which is how the server prints a
   real setting's value and range: six significant digits, no trailing
   zeros, and an exponent once the number is large or small enough.

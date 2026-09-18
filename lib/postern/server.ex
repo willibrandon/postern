@@ -313,14 +313,14 @@ defmodule Postern.Server do
       end)
 
     diagnostics =
-      trust_diagnostics(
+      actionable_diagnostics(
         lsp,
         params.text_document.uri,
         params.context.diagnostics || [],
         params.range
       )
 
-    {:reply, Features.code_actions(diagnostics) ++ live, lsp}
+    {:reply, Features.code_actions(diagnostics, params.text_document.uri) ++ live, lsp}
   end
 
   # The quick fix on a trust hint. Handling it here means it works from any
@@ -476,16 +476,16 @@ defmodule Postern.Server do
   defp related_kinds(_kind), do: []
 
   # Clients differ in which diagnostics they send back with a code action
-  # request, so the trust hints in the range come from the document itself
-  # when the request carries none.
-  defp trust_diagnostics(lsp, uri, context, range) do
-    with false <- Enum.any?(context, &Features.trust_diagnostic?/1),
-         %{text: text, kind: :pg_hba_conf} <- DocumentStore.get(lsp, uri) do
-      hints =
+  # request, and one that sends them may drop the data they carry, so the
+  # diagnostics with a fix in the range come from the document itself.
+  defp actionable_diagnostics(lsp, uri, context, range) do
+    with false <- Enum.any?(context, &Features.actionable?/1),
+         %{text: text} <- DocumentStore.get(lsp, uri) do
+      fixes =
         document_diagnostics(lsp, uri, text)
-        |> Enum.filter(&(Features.trust_diagnostic?(&1) and overlaps?(&1.range, range)))
+        |> Enum.filter(&(Features.actionable?(&1) and overlaps?(&1.range, range)))
 
-      context ++ hints
+      context ++ fixes
     else
       _ -> context
     end

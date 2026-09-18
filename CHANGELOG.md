@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+- Quick fixes for what the checks already know: the closest catalog name or the name that
+  took a setting's place, a unit spelled the way the server takes it, `128MB` for `128mb`, a
+  value quoted where the scanner refused it bare, and the line an override or an internal
+  setting makes useless removed or kept as a comment. Each is an edit rather than a command,
+  so it works in every client, and the server finds the fixes in the range itself for a
+  client that sends no diagnostics with its request.
 - Document symbols, so the outline, the breadcrumbs and the symbol picker have something to
   show: postgresql.conf as the sections the sample marks with a line of dashes above and
   below and the subsections it marks with a dash on either side, with the settings under
