@@ -5,6 +5,26 @@ defmodule Postern.CatalogGeneratorTest do
 
   doctest CatalogGenerator
 
+  test "reads a module's enum setting from its DefineCustomEnumVariable call" do
+    text = """
+    	DefineCustomEnumVariable("auto_explain.log_level",
+    							 "Log level for the plan.",
+    							 NULL,
+    							 &auto_explain_log_level,
+    							 LOG,
+    							 loglevel_options,
+    							 PGC_SUSET,
+    							 0,
+    							 NULL,
+    							 NULL,
+    							 NULL);
+    """
+
+    assert CatalogGenerator.enum_settings(text) == %{
+             "auto_explain.log_level" => "loglevel_options"
+           }
+  end
+
   test "reads the encoding names out of the table in encnames.c" do
     text = """
     const pg_encname pg_encname_tbl[] =

@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+- The catalogs know the settings of the contrib modules and plpgsql, pg_stat_statements,
+  auto_explain, pg_prewarm, pg_trgm, auth_delay and, on the versions that have them,
+  postgres_fdw, basic_archive, basebackup_to_shell, isn, passwordcheck and pgcrypto, so
+  `pg_stat_statements.max = 50` is out of range the way any setting is, the hover names the
+  module, and completion offers the names. A placeholder under a module's prefix that the
+  module does not define gets the warning the server logs when the module loads, in the words
+  of the version. The catalog task loads each module before it selects, and the servers it
+  reads must be started with pg_stat_statements and pg_prewarm in `shared_preload_libraries`.
 - A string setting with a check hook is checked the way the hook checks it, in its words:
   the DateStyle words and the two of them that may not disagree, the log destinations a
   version has, the resource managers `wal_consistency_checking` can mask, the encodings and

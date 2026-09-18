@@ -8,6 +8,13 @@ defmodule Postern.CatalogGenerator do
   catalog is a JSON object containing its PostgreSQL major version and a list of
   setting maps.
 
+  The settings of the contrib modules and the procedural languages are in
+  `pg_settings` only once their library is loaded, so the generator loads
+  each one it can with `LOAD` before it selects, and records the module on
+  the row. Two of them, pg_stat_statements and pg_prewarm, define their
+  settings only when they come in through `shared_preload_libraries`, so
+  the servers are started with them preloaded.
+
   One thing `pg_settings` keeps to itself: each enum setting's table in the
   source carries entries marked hidden, `archive` and `hot_standby` on
   `wal_level` from before `replica` was the name, and `true`, `false`, `yes`,
@@ -36,6 +43,15 @@ defmodule Postern.CatalogGenerator do
 
   @default_ports %{13 => 5413, 14 => 5414, 15 => 5415, 16 => 5416, 17 => 5417, 18 => 5418}
 
+  # The libraries that define settings, which LOAD brings into pg_settings.
+  # sepgsql needs SELinux and the procedural languages other than plpgsql
+  # their interpreters, so a LOAD that fails is skipped.
+  @libraries ~w(auth_delay auto_explain basebackup_to_shell basic_archive isn passwordcheck
+                pg_prewarm pg_stat_statements pg_trgm pgcrypto plpgsql plperl pltcl
+                postgres_fdw sepgsql)
+
+  @preloaded ~w(pg_stat_statements pg_prewarm)
+
   @doc """
   Generates one catalog by querying the PostgreSQL server on `port` and
   reading the enum tables of the same version from the checkout at `:source`.
@@ -62,6 +78,9 @@ defmodule Postern.CatalogGenerator do
       )
 
     try do
+      check_preloaded!(connection, version)
+      Enum.each(@libraries, &Postgrex.query(connection, "load '#{&1}'", [], query_type: :text))
+
       case Postgrex.query(connection, @select, [], query_type: :text) do
         {:ok, result} ->
           settings =
@@ -70,6 +89,7 @@ defmodule Postern.CatalogGenerator do
               |> Enum.zip(row)
               |> Map.new()
               |> with_enums(hidden)
+              |> with_module()
             end)
 
           catalog = %{
@@ -125,7 +145,16 @@ defmodule Postern.CatalogGenerator do
     ref = release_branch(source, version)
 
     files =
-      git!(source, ["grep", "-l", "config_enum_entry", ref, "--", "src/backend"])
+      git!(source, [
+        "grep",
+        "-l",
+        "config_enum_entry",
+        ref,
+        "--",
+        "src/backend",
+        "src/pl",
+        "contrib"
+      ])
       |> String.split("\n", trim: true)
       |> Enum.map(fn line -> line |> String.split(":", parts: 2) |> List.last() end)
 
@@ -209,7 +238,8 @@ defmodule Postern.CatalogGenerator do
 
   @doc """
   The enum settings declared in a C source text, as the setting's name to
-  the name of its table.
+  the name of its table: the rows of `ConfigureNamesEnum` in the server,
+  and the `DefineCustomEnumVariable` calls of a module.
 
   ## Examples
 
@@ -232,15 +262,23 @@ defmodule Postern.CatalogGenerator do
   """
   @spec enum_settings(String.t()) :: %{String.t() => String.t()}
   def enum_settings(text) do
-    case Regex.run(~r/ConfigureNamesEnum\[\]\s*=\s*\{(.*?)\n\};/s, text) do
-      [_all, body] ->
-        ~r/\{\s*"([A-Za-z_]+)"\s*,\s*PGC_\w+\s*,.*?\}\s*,\s*&\w+\s*,\s*\w+\s*,\s*(\w+)\s*,/s
-        |> Regex.scan(body)
-        |> Map.new(fn [_all, setting, table] -> {setting, table} end)
+    server =
+      case Regex.run(~r/ConfigureNamesEnum\[\]\s*=\s*\{(.*?)\n\};/s, text) do
+        [_all, body] ->
+          ~r/\{\s*"([A-Za-z_]+)"\s*,\s*PGC_\w+\s*,.*?\}\s*,\s*&\w+\s*,\s*\w+\s*,\s*(\w+)\s*,/s
+          |> Regex.scan(body)
+          |> Map.new(fn [_all, setting, table] -> {setting, table} end)
 
-      nil ->
-        %{}
-    end
+        nil ->
+          %{}
+      end
+
+    custom =
+      ~r/DefineCustomEnumVariable\(\s*"([A-Za-z_.]+)".*?&\w+\s*,\s*\w+\s*,\s*(\w+)\s*,/s
+      |> Regex.scan(text)
+      |> Map.new(fn [_all, setting, table] -> {setting, table} end)
+
+    Map.merge(server, custom)
   end
 
   # A hidden spelling stands for the visible one with the same constant.
@@ -250,6 +288,27 @@ defmodule Postern.CatalogGenerator do
     for {spelling, constant, true} <- entries,
         into: %{},
         do: {spelling, Map.get(visible, constant)}
+  end
+
+  # The servers must have the two libraries that define their settings only
+  # when preloaded, or the catalog would be missing them without a word.
+  defp check_preloaded!(connection, version) do
+    {:ok, %{rows: [[loaded]]}} =
+      Postgrex.query(connection, "show shared_preload_libraries", [], query_type: :text)
+
+    missing = Enum.reject(@preloaded, &String.contains?(loaded, &1))
+
+    if missing != [] do
+      raise "PostgreSQL #{version} must be started with #{Enum.join(missing, ", ")} in shared_preload_libraries"
+    end
+  end
+
+  # A setting with a dot in its name belongs to the module before the dot.
+  defp with_module(row) do
+    case String.split(row["name"], ".", parts: 2) do
+      [module, _rest] -> Map.put(row, "module", module)
+      [_name] -> Map.put(row, "module", nil)
+    end
   end
 
   # A row's enumvals as a list, and its hidden spellings from the source.

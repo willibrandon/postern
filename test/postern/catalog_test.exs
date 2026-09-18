@@ -35,6 +35,25 @@ defmodule Postern.CatalogTest do
     assert Catalog.fetch(catalog, "shared_buffers")["enumvals"] == nil
   end
 
+  test "a catalog knows the settings of the contrib modules and plpgsql" do
+    for version <- Catalog.versions() do
+      catalog = Catalog.load(version)
+      assert "pg_stat_statements" in Catalog.modules(catalog)
+      assert "plpgsql" in Catalog.modules(catalog)
+      assert Catalog.fetch(catalog, "pg_stat_statements.max")["module"] == "pg_stat_statements"
+      assert Catalog.fetch(catalog, "pg_stat_statements.max")["min_val"] == "100"
+      assert Catalog.fetch(catalog, "auto_explain.log_min_duration")["unit"] == "ms"
+      assert Catalog.fetch(catalog, "shared_buffers")["module"] == nil
+    end
+
+    # A module's enum table is read like the server's own.
+    assert Catalog.fetch(Catalog.load(18), "auto_explain.log_level")["hidden_enumvals"] ==
+             %{"debug" => "debug2"}
+
+    assert "pgcrypto" in Catalog.modules(Catalog.load(18))
+    refute "pgcrypto" in Catalog.modules(Catalog.load(17))
+  end
+
   test "a catalog carries the server's time zone names and encodings" do
     for version <- Catalog.versions() do
       catalog = Catalog.load(version)

@@ -110,6 +110,34 @@ defmodule Postern.FeaturesTest do
     assert Enum.map(items, & &1.insert_text) == ["csvlog"]
   end
 
+  test "a module's setting has its module in the hover and in completion" do
+    %{contents: %{value: value}} =
+      Features.hover(
+        "file:///tmp/postgresql.conf",
+        "pg_stat_statements.max = 5000\n",
+        %Position{line: 0, character: 3},
+        %{
+          "pg" => 18
+        }
+      )
+
+    assert value =~ "**Module:** `pg_stat_statements`"
+    assert value =~ "Sets the maximum number of statements tracked by pg_stat_statements."
+
+    %{items: items} =
+      Features.completion(
+        "file:///tmp/postgresql.conf",
+        "pg_stat_statements.m\n",
+        %Position{line: 0, character: 20},
+        %{
+          "pg" => 18
+        }
+      )
+
+    assert %{label: "pg_stat_statements.max", detail: "pg_stat_statements setting"} =
+             Enum.find(items, &(&1.label == "pg_stat_statements.max"))
+  end
+
   test "hover lists enum values without the literal's quotes" do
     text = "default_transaction_isolation = 'read committed'\n"
     position = %Position{line: 0, character: 3}

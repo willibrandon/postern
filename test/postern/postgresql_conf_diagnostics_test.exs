@@ -214,11 +214,59 @@ defmodule Postern.PostgresqlConfDiagnosticsTest do
     for line <- [
           "pg_stat_statements.max = 5000",
           "auto_explain.log_min_duration = 250ms",
-          "x.y = on"
+          "auto_explain.log_level = debug",
+          "x.y = on",
+          "pgcrypto.builtin_crypto_enabled = fips"
         ] do
       assert Diagnostics.for_document("file:///tmp/postgresql.conf", line <> "\n", %{"pg" => 18}) ==
                []
     end
+  end
+
+  test "a known module's setting is checked like any other" do
+    for {line, expected} <- [
+          {"pg_stat_statements.max = 50",
+           ~s|50 is outside the valid range for parameter "pg_stat_statements.max" (100 .. 1073741823)|},
+          {"auto_explain.log_min_duration = 5MB",
+           ~s(invalid value for parameter "auto_explain.log_min_duration": "5MB"\n) <>
+             ~s(Valid units for this parameter are "us", "ms", "s", "min", "h", and "d".)},
+          {"plpgsql.variable_conflict = nope",
+           ~s(invalid value for parameter "plpgsql.variable_conflict": "nope"\n) <>
+             "Available values: error, use_variable, use_column."}
+        ] do
+      [diagnostic] =
+        Diagnostics.for_document("file:///tmp/postgresql.conf", line <> "\n", %{"pg" => 18})
+
+      assert diagnostic.message == expected
+    end
+  end
+
+  test "a placeholder under a known module's prefix is removed with a warning when it loads" do
+    [diagnostic] =
+      Diagnostics.for_document("file:///tmp/postgresql.conf", "pg_stat_statements.nope = 1\n", %{
+        "pg" => 18
+      })
+
+    assert diagnostic.severity == 2
+
+    assert diagnostic.message ==
+             ~s(invalid configuration parameter name "pg_stat_statements.nope", removing it\n) <>
+               ~s("pg_stat_statements" is now a reserved prefix.)
+
+    [diagnostic] =
+      Diagnostics.for_document("file:///tmp/postgresql.conf", "pg_stat_statements.nope = 1\n", %{
+        "pg" => 14
+      })
+
+    assert diagnostic.severity == 2
+
+    assert diagnostic.message ==
+             ~s(unrecognized configuration parameter "pg_stat_statements.nope")
+
+    # A module the version's catalog does not know keeps its placeholder.
+    assert Diagnostics.for_document("file:///tmp/postgresql.conf", "pgcrypto.nope = 1\n", %{
+             "pg" => 17
+           }) == []
   end
 
   test "a setting with the internal context cannot be changed, whatever its value" do

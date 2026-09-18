@@ -110,10 +110,12 @@ defmodule Postern.PostgresqlConfDiagnostics do
   defp setting_diagnostics(entry, nil, name, versions, catalog) do
     cond do
       # A name with a dot in it belongs to a module. The server keeps the
-      # value as a placeholder until the module loads and checks it, and says
-      # nothing before then, so neither does this.
+      # value as a placeholder until the module loads, and a module the
+      # catalog knows removes a placeholder it did not define, with a
+      # warning: since 15 in the words of the reserved prefix, before that
+      # as an unrecognized parameter.
       String.contains?(name, ".") ->
-        []
+        placeholder_diagnostic(entry, name, catalog)
 
       setting_available_elsewhere?(name, catalog.version, versions) ->
         [
@@ -147,6 +149,33 @@ defmodule Postern.PostgresqlConfDiagnostics do
     case validate_value(entry.value, setting, catalog) do
       :ok -> []
       {:error, message} -> [diagnostic(entry.value_span, @error, message)]
+    end
+  end
+
+  defp placeholder_diagnostic(entry, name, catalog) do
+    [module | _rest] = String.split(name, ".", parts: 2)
+
+    cond do
+      module not in Catalog.modules(catalog) ->
+        []
+
+      catalog.version >= 15 ->
+        [
+          diagnostic(
+            entry.name_span,
+            @warning,
+            ~s(invalid configuration parameter name "#{name}", removing it\n"#{module}" is now a reserved prefix.)
+          )
+        ]
+
+      true ->
+        [
+          diagnostic(
+            entry.name_span,
+            @warning,
+            ~s(unrecognized configuration parameter "#{name}")
+          )
+        ]
     end
   end
 

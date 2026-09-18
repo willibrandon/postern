@@ -14,8 +14,9 @@ shows the exact message a reload would produce, before the reload.
 The offline checks use the words the server logs, so a message in the editor is the one the
 log would show after a reload, hint included.
 
-- Unknown or misspelled settings, with the closest catalog name. A setting with a dot in its
-  name belongs to a module, and is taken as the server takes it until that module checks it.
+- Unknown or misspelled settings, with the closest catalog name. A setting of a contrib module
+  or plpgsql, `pg_stat_statements.max` say, is checked like any other, and one of a module the
+  catalog does not know is taken as the server takes it until that module checks it.
 - Values that do not fit the setting's type, unit, range, enum or vocabulary, such as a time
   zone the server does not know or a log destination the version does not have.
 - Settings removed or renamed between versions, and settings that need a restart.
@@ -132,9 +133,11 @@ Zig 0.16.0, `xz`, and `7z` for the Windows target:
 MIX_ENV=prod mix release
 ```
 
-The catalog task queries `pg_settings` on each server and reads the enum tables of the same
-version from the checkout, since the view leaves out the spellings the server takes without
-listing them, `wal_level = archive` say.
+The catalog task queries `pg_settings` on each server, with the contrib modules and plpgsql
+loaded so that their settings are in it, and reads the enum tables of the same version from
+the checkout, since the view leaves out the spellings the server takes without listing them,
+`wal_level = archive` say. The servers need pg_stat_statements and pg_prewarm in
+`shared_preload_libraries`, since those two define their settings only when preloaded.
 
 Burrito caches the unpacked runtime by application version, so bump the version in `mix.exs` or
 delete the `.burrito/postern_erts-*` directory when testing a rebuilt binary.

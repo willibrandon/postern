@@ -115,6 +115,17 @@ defmodule Postern.Catalog do
     setting
     |> Map.update("enumvals", nil, &enum_list/1)
     |> Map.put_new("hidden_enumvals", if(setting["vartype"] == "enum", do: %{}, else: nil))
+    |> Map.put_new("module", nil)
+  end
+
+  @doc "The modules whose settings a catalog knows, from the prefix before the dot."
+  @spec modules(%{settings: map()}) :: [String.t()]
+  def modules(%{settings: settings}) do
+    settings
+    |> Enum.map(fn {_name, setting} -> setting["module"] end)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+    |> Enum.sort()
   end
 
   defp enum_list(nil), do: nil

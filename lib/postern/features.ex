@@ -162,6 +162,7 @@ defmodule Postern.Features do
     details =
       [
         "**Type:** `#{setting["vartype"]}`",
+        optional_detail("Module", setting["module"]),
         optional_detail("Unit", setting["unit"]),
         optional_detail("Default", setting["boot_val"]),
         range_detail(setting),
@@ -292,14 +293,22 @@ defmodule Postern.Features do
         version =
           Postern.PostgresqlConfDiagnostics.target_version(text, options, Catalog.versions())
 
-        Catalog.load(version).settings
+        catalog = Catalog.load(version)
+
+        catalog.settings
         |> Enum.reject(fn {_name, setting} -> setting["context"] == "internal" end)
         |> Enum.map(fn {name, _setting} -> name end)
         |> Enum.filter(&String.starts_with?(String.downcase(&1), String.downcase(prefix)))
         |> Enum.sort()
-        |> Enum.map(&completion_item(&1, CompletionItemKind.keyword(), "PostgreSQL setting"))
+        |> Enum.map(&name_item(&1, Catalog.fetch(catalog, &1)["module"]))
     end
   end
+
+  defp name_item(name, nil),
+    do: completion_item(name, CompletionItemKind.keyword(), "PostgreSQL setting")
+
+  defp name_item(name, module),
+    do: completion_item(name, CompletionItemKind.keyword(), "#{module} setting")
 
   defp value_completion(nil, _prefix, _before, _after_cursor, _catalog, _range), do: []
 

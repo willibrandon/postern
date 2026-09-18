@@ -6,10 +6,12 @@ defmodule Mix.Tasks.Postern.Catalog do
   querying Docker PostgreSQL servers on ports 5413 through 5418 and reading
   the enum tables of each version from a git checkout of PostgreSQL.
 
-  Start the servers before running this task, for example:
+  Start the servers before running this task, with the two modules that
+  define their settings only when preloaded:
 
       for v in 13 14 15 16 17 18; do
-        docker run -d --name pg$v -e POSTGRES_HOST_AUTH_METHOD=trust -p 54$v:5432 postgres:$v
+        docker run -d --name pg$v -e POSTGRES_HOST_AUTH_METHOD=trust -p 54$v:5432 postgres:$v \\
+          -c shared_preload_libraries=pg_stat_statements,pg_prewarm
       done
 
   Then point the task at a checkout that has the release branches:
@@ -17,8 +19,10 @@ defmodule Mix.Tasks.Postern.Catalog do
       mix postern.catalog --source ~/src/postgres
 
   The task never invents setting metadata; all setting names, types, ranges,
-  enum values and descriptions come from `pg_settings`, and the spellings the
-  view hides, `wal_level = archive` say, from the source of the same version.
+  enum values and descriptions come from `pg_settings`, with the contrib
+  modules and plpgsql loaded so that their settings are in it, and the
+  spellings the view hides, `wal_level = archive` say, from the source of the
+  same version.
   """
 
   use Mix.Task
