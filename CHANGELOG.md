@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+- The server halts the moment its editor is gone, whichever way it goes. A write that
+  failed because the editor had closed its end of stdout took OTP's tty driver and the
+  `user` process down with it, so the read waiting on stdin was never answered and the
+  server ran until something killed it, which is also why the stdio test that closes the
+  pipe failed now and then in CI. The transport now watches `user` and halts the moment it
+  is gone, which is what a failed write comes to, and halts on a failed read as it does at
+  end of file.
 - `postern check` takes `--pg` for the version to check against, `--connection-string` or
   `--live` to compare the files with a running server the way the editor does, and
   `--stdin-filename` to read a file from stdin as if it stood at that path, which is how an

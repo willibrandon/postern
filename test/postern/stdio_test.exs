@@ -4,7 +4,11 @@ defmodule Postern.StdioTest do
   # The server under test is a second VM on the build the suite runs on, so a
   # fresh clone needs nothing but `mix test`. The transport is off in the test
   # environment, since this VM keeps its own stdin, and the child turns it on.
-  @boot "Application.put_env(:postern, :stdio, true, persistent: true); " <>
+  # Mix starts the logger before it loads the configuration, on stdout at
+  # debug, so the child starts it again the way a release does, on stderr at
+  # warning, and stdout carries the protocol alone.
+  @boot "Application.stop(:logger); {:ok, _} = Application.ensure_all_started(:logger); " <>
+          "Application.put_env(:postern, :stdio, true, persistent: true); " <>
           "{:ok, _} = Application.ensure_all_started(:postern); Process.sleep(:infinity)"
 
   test "speaks initialize and shutdown over stdio, then halts on exit" do
@@ -59,15 +63,61 @@ defmodule Postern.StdioTest do
            "server kept running after its stdin closed (pid #{os_pid})"
   end
 
-  defp start_server do
+  # An editor that dies mid-reply closes its end of the server's stdout first.
+  # The failed write stops OTP's tty driver, and with it the process that
+  # answers reads, so no end of file ever reaches the reader waiting on stdin.
+  # The child's stdin is a named pipe this VM writes into, so it stays open
+  # while the port that carries its stdout closes.
+  @tag :unix
+  test "halts when a reply cannot be written, though stdin stays open" do
+    fifo = Path.join(System.tmp_dir!(), "postern-stdin-#{System.unique_integer([:positive])}")
+    {_, 0} = System.cmd("mkfifo", [fifo])
+    on_exit(fn -> File.rm(fifo) end)
+
+    port = start_server(stdin: fifo)
+    {:os_pid, os_pid} = Port.info(port, :os_pid)
+
+    on_exit(fn ->
+      if alive?(os_pid), do: System.cmd("kill", ["-9", Integer.to_string(os_pid)])
+    end)
+
+    {:ok, stdin} = File.open(fifo, [:write, :binary])
+
+    IO.binwrite(
+      stdin,
+      packet(%{
+        "jsonrpc" => "2.0",
+        "id" => 1,
+        "method" => "initialize",
+        "params" => %{"processId" => nil, "rootUri" => nil, "capabilities" => %{}}
+      })
+    )
+
+    {%{"id" => 1}, _buffer} = read_response(port, "")
+
+    Port.close(port)
+    IO.binwrite(stdin, packet(%{"jsonrpc" => "2.0", "id" => 2, "method" => "shutdown"}))
+
+    assert gone_within?(os_pid, 5_000),
+           "server kept running after its stdout closed (pid #{os_pid})"
+  end
+
+  defp start_server(opts \\ []) do
+    mix = System.find_executable("mix")
+    args = ["run", "--no-compile", "--no-start", "-e", @boot]
+
+    {executable, args} =
+      case opts[:stdin] do
+        nil ->
+          {mix, args}
+
+        fifo ->
+          {"/bin/sh", ["-c", ~s(fifo="$1"; shift; exec "$@" < "$fifo"), "sh", fifo, mix | args]}
+      end
+
     Port.open(
-      {:spawn_executable, System.find_executable("mix")},
-      [
-        :binary,
-        :exit_status,
-        {:args, ["run", "--no-compile", "--no-start", "-e", @boot]},
-        {:env, [{~c"MIX_ENV", ~c"test"}]}
-      ]
+      {:spawn_executable, executable},
+      [:binary, :exit_status, {:args, args}, {:env, [{~c"MIX_ENV", ~c"test"}]}]
     )
   end
 
