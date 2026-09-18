@@ -9,6 +9,7 @@ defmodule Postern.PgIdentDiagnostics do
   alias Postern.Parser.PgHba
   alias Postern.Parser.PgIdent
   alias Postern.PgHbaOptions
+  alias Postern.RegexCheck
 
   @warning 2
   @error 1
@@ -40,7 +41,25 @@ defmodule Postern.PgIdentDiagnostics do
 
     parser_diagnostics ++
       version_diagnostics(entries, version) ++
+      compile_diagnostics(entries, version) ++
       unused_diagnostics(entries, referenced) ++ include_diagnostics(tree, path)
+  end
+
+  # A system user name that starts with a slash has been a regular
+  # expression compiled when the file loads on every version, and the
+  # PostgreSQL user name is one from 16; the engine's refusal is the line's
+  # error, on the token.
+  defp compile_diagnostics(entries, version) do
+    for %{type: :mapping} = mapping <- entries,
+        {name, span} <- [
+          {mapping.system_user, mapping.system_span},
+          {mapping.pg_user, mapping.pg_span}
+        ],
+        span != mapping.pg_span or PgHbaOptions.regex?(version),
+        "/" <> pattern <- [name],
+        message = RegexCheck.message(pattern),
+        message != nil,
+        do: diagnostic(span, @error, message)
   end
 
   # The three directives and a regular expression as the PostgreSQL user name

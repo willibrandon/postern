@@ -152,7 +152,9 @@ defmodule Postern.ValueOracleLiveTest do
     "host all 10.0.0.0/8 md5",
     "hostx all all 10.0.0.0/8 md5",
     "host all,all all 10.0.0.0/8 md5 md5",
-    "host all @admins 10.0.0.0/8 scram-sha-256"
+    "host all @admins 10.0.0.0/8 scram-sha-256",
+    "host all /^(.* 10.0.0.0/8 scram-sha-256",
+    "host /^app_[a-z]+$ all 10.0.0.0/8 scram-sha-256"
   ]
 
   setup_all do

@@ -24,6 +24,7 @@ defmodule Postern.PgHbaDiagnostics do
   alias Postern.Parser.PgHba
   alias Postern.Parser.PgIdent
   alias Postern.PgHbaOptions
+  alias Postern.RegexCheck
 
   import Bitwise
 
@@ -79,13 +80,21 @@ defmodule Postern.PgHbaDiagnostics do
       rule_diagnostics ++ include_diagnostics(tree, path)
   end
 
-  # A file of names the server could not open fails the line before it is a
-  # rule, so that is all it says; then it stops at a method it does not
-  # know; the parser has already refused an address it would.
+  # A file of names the server could not open, or a regular expression it
+  # cannot compile, fails the line before it is a rule, so that is all it
+  # says; then it stops at a method it does not know; the parser has
+  # already refused an address it would.
   defp rule_diagnostics(_rule, [problem | _rest], _version, _maps, _trust, _path, _previous),
     do: [diagnostic(problem.span, @error, problem.message)]
 
   defp rule_diagnostics(rule, [], version, maps, report_trust, path, previous) do
+    case compile_diagnostics(rule, version) do
+      [] -> checked_rule_diagnostics(rule, version, maps, report_trust, path, previous)
+      failed -> failed
+    end
+  end
+
+  defp checked_rule_diagnostics(rule, version, maps, report_trust, path, previous) do
     address_advice(rule) ++
       case method_diagnostics(rule, version) do
         [] ->
@@ -298,6 +307,20 @@ defmodule Postern.PgHbaDiagnostics do
     else
       for %{type: :include, directive: directive, tokens: [%{span: span} | _]} <- entries,
           do: diagnostic(span, @error, ~s(invalid connection type "#{directive}"))
+    end
+  end
+
+  # From 16 a database or user that starts with a slash is compiled when the
+  # rule loads, and one the engine refuses is the rule's error, on its field.
+  defp compile_diagnostics(%{databases: databases, users: users} = rule, version) do
+    if PgHbaOptions.regex?(version) do
+      for {names, field} <- [{databases, 1}, {users, 2}],
+          "/" <> pattern <- names,
+          message = RegexCheck.message(pattern),
+          message != nil,
+          do: diagnostic(field_span(rule, field), @error, message)
+    else
+      []
     end
   end
 

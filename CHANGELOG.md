@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+- A regular expression the server compiles when a file loads, a pg_ident.conf system user name
+  that starts with a slash on every version, and a pg_hba.conf database or user or a
+  pg_ident.conf PostgreSQL user name that does from 16, is compiled, and one the engine refuses
+  is the line's error on the token, in the engine's words: `invalid regular expression "^(.*":
+  parentheses () not balanced`. The server's engine is not PCRE, so only what both refuse is
+  reported.
 - A database or user field of pg_hba.conf that starts with `@` names a file of names, read
   relative to the file the rule is in, separated by white space or commas, with comments and
   nested files as the server reads them. The names stand in for the token, so a later rule
