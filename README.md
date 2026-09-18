@@ -13,6 +13,9 @@ it. With a connection, a code
 action writes the setting under the cursor with `ALTER SYSTEM SET`, or reloads, and shows what
 the server answered.
 
+These pages and the module documentation are also at
+[willibrandon.github.io/postern](https://willibrandon.github.io/postern).
+
 ## What it reports
 
 The offline checks use the words the server logs, so a message in the editor is the one the
@@ -91,7 +94,7 @@ directory on first run.
 Visual Studio Code users can install the Postern extension from the
 [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=willibrandon.postern)
 or [Open VSX](https://open-vsx.org/extension/willibrandon/postern). It bundles the binary; see the
-[extension README](editors/vscode/README.md) for its settings.
+[extension page](https://willibrandon.github.io/postern/vscode.html) for its settings.
 
 ### Neovim
 
@@ -105,33 +108,35 @@ Neovim 0.11 or newer. The plugin is
 It gives the four files their filetypes, enables the server, `postern` on your `PATH` or the
 binary `:PosternInstall` fetches from the latest release, and registers the
 [tree-sitter grammar](https://github.com/willibrandon/tree-sitter-postgresql-conf) so
-`:TSInstall postgresql_conf` gives them highlighting and text objects. See
-[editors/nvim/README.md](editors/nvim/README.md).
+`:TSInstall postgresql_conf` gives them highlighting and text objects. See the
+[Neovim page](https://willibrandon.github.io/postern/neovim.html).
 
 ### Fresh
 
 Fresh 0.4.10 or newer. Run `Package: Install from URL` with
 `https://github.com/willibrandon/postern#editors/fresh`. It highlights the four files and starts
-the server, which must be on your `PATH`. See [editors/fresh/README.md](editors/fresh/README.md).
+the server, which must be on your `PATH`. See the
+[Fresh page](https://willibrandon.github.io/postern/fresh.html).
 
 ### Helix
 
 Append [editors/helix/languages.toml](editors/helix/languages.toml) to your `languages.toml`, put
 its queries under `runtime/queries/postgresql-conf`, then `hx --grammar fetch` and
-`hx --grammar build`. See [editors/helix/README.md](editors/helix/README.md).
+`hx --grammar build`. See the
+[Helix page](https://willibrandon.github.io/postern/helix.html).
 
 ### Emacs
 
 Emacs 29.1 or newer. Load `editors/emacs` and require `postgresql-conf-ts-mode`; it owns the four
 files, highlights them through the tree-sitter grammar, and registers the server with Eglot,
-`postern` on your `PATH` or the binary `M-x postgresql-conf-ts-mode-install-server` fetches. See
-[editors/emacs/README.md](editors/emacs/README.md).
+`postern` on your `PATH` or the binary `M-x postgresql-conf-ts-mode-install-server` fetches. See the
+[Emacs page](https://willibrandon.github.io/postern/emacs.html).
 
 ### Zed
 
-Install [editors/zed](editors/zed) as a dev extension. It highlights the four files and downloads
-the server for your platform when `postern` is not on your `PATH`. See
-[editors/zed/README.md](editors/zed/README.md).
+Install `editors/zed` as a dev extension. It highlights the four files and downloads
+the server for your platform when `postern` is not on your `PATH`. See the
+[Zed page](https://willibrandon.github.io/postern/zed.html).
 
 ### Other file names
 

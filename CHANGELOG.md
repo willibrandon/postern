@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- A documentation site at willibrandon.github.io/postern, which ExDoc builds from the README,
+  the changelog, the editor notes and the module docs, a workflow publishes from main, and
+  every pull request builds with warnings as errors.
 - The server installs from a Homebrew tap, `brew install willibrandon/tap/postern`, from a
   Scoop bucket, `scoop install postern` once willibrandon's bucket is added, and with winget,
   `winget install willibrandon.postern`, whose MSI puts it in Program Files and on the PATH.
