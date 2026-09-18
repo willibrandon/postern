@@ -44,3 +44,6 @@ postern-*.tar
 
 # The binary the pre-commit hook fetches into a checkout
 .postern/
+
+# Playwright
+.playwright-mcp/
