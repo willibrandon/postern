@@ -39,6 +39,8 @@ log would show after a reload, hint included.
 - `pg_hba.conf` rules that an earlier rule shadows, options that do not apply to the method, a
   file of names given with `@` that the server could not open, a regular expression its engine
   refuses, and ident maps that are missing or unused.
+- An outline of the file for the editor's symbol views: sections and their settings, rules,
+  and maps with their mappings.
 - Hover with the setting's description, default and range, and on `pg_hba.conf` and
   `pg_ident.conf` with the manual's words for the connection type, the field, the method or
   the option under the cursor; completion of names, enum values, authentication methods and,

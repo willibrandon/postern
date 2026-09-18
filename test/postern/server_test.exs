@@ -48,7 +48,8 @@ defmodule Postern.ServerTest do
             "save" => %{"includeText" => true}
           },
           "referencesProvider" => true,
-          "renameProvider" => %{"prepareProvider" => true}
+          "renameProvider" => %{"prepareProvider" => true},
+          "documentSymbolProvider" => true
         },
         "serverInfo" => %{"name" => "postern", "version" => _}
       })

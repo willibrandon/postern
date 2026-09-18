@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+- Document symbols, so the outline, the breadcrumbs and the symbol picker have something to
+  show: postgresql.conf as the sections the sample marks with a line of dashes above and
+  below and the subsections it marks with a dash on either side, with the settings under
+  each and the value as the detail; pg_hba.conf as one symbol per rule, named by its fields
+  and detailed by its method; pg_ident.conf as one symbol per map with its mappings under it;
+  and an include as a symbol of its own.
 - A live diagnostic is placed on the document the server's rows describe, line by line, rather
   than on any file with the same name: a postgresql.conf is the server's when every row of a
   file has the document's setting and value on its line, and pg_hba.conf and pg_ident.conf

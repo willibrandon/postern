@@ -28,6 +28,7 @@ defmodule Postern.Server do
   alias GenLSP.Requests.TextDocumentCompletion
   alias GenLSP.Requests.TextDocumentDefinition
   alias GenLSP.Requests.TextDocumentDocumentLink
+  alias GenLSP.Requests.TextDocumentDocumentSymbol
   alias GenLSP.Requests.TextDocumentHover
   alias GenLSP.Requests.TextDocumentInlayHint
   alias GenLSP.Requests.TextDocumentPrepareRename
@@ -132,6 +133,7 @@ defmodule Postern.Server do
         references_provider: true,
         rename_provider: %RenameOptions{prepare_provider: true},
         document_link_provider: %DocumentLinkOptions{resolve_provider: false},
+        document_symbol_provider: true,
         inlay_hint_provider: true,
         code_action_provider: true,
         execute_command_provider: %ExecuteCommandOptions{commands: Features.commands()}
@@ -265,6 +267,28 @@ defmodule Postern.Server do
             text,
             Map.put(feature_options(lsp), :kind, kind)
           )
+
+        nil ->
+          []
+      end
+
+    {:reply, reply, lsp}
+  end
+
+  def handle_request(%TextDocumentDocumentSymbol{params: params}, lsp) do
+    reply =
+      case DocumentStore.get(lsp, params.text_document.uri) do
+        %{text: text, kind: kind} ->
+          options = feature_options(lsp)
+
+          version =
+            Postern.PostgresqlConfDiagnostics.target_version(
+              text,
+              options,
+              Postern.Catalog.versions()
+            )
+
+          Postern.Symbols.document_symbols(kind, text, version)
 
         nil ->
           []
