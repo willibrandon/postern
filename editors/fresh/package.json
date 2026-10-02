@@ -49,8 +49,8 @@
     "validate": "npm run format:check && npm run typecheck && npm test && npm run check-plugin"
   },
   "devDependencies": {
-    "@types/node": "^24.0.0",
-    "prettier": "^3.9.8",
+    "@types/node": "^24.13.6",
+    "prettier": "^3.9.9",
     "typescript": "^7.0.2"
   }
 }
