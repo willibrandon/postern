@@ -2,7 +2,7 @@
   "name": "postern",
   "displayName": "Postern",
   "description": "Diagnostics, hover and completion for postgresql.conf, pg_hba.conf and pg_ident.conf.",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "publisher": "willibrandon",
   "license": "MIT",
   "engines": {

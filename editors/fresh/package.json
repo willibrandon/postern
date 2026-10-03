@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/sinelaw/fresh/main/crates/fresh-editor/plugins/schemas/package.schema.json",
   "name": "postern",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "PostgreSQL configuration files: highlighting for postgresql.conf, pg_hba.conf and pg_ident.conf, and the Postern language server",
   "type": "bundle",
   "author": "Brandon Williams",

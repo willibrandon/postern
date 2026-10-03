@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.2] - 2026-10-03
+
+- Bundles server 0.3.2, whose dependencies carry the current security fixes. The language client
+  moves to 10.1.2, which logs the connection's messages to the output channel rather than the
+  console. Nothing else changes in the extension.
+
 ## [0.3.1] - 2026-09-18
 
 - Bundles server 0.3.1, in which a `# postern: pg=16` comment at the top of a file overrides the

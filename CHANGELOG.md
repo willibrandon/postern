@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.2] - 2026-10-03
+
+- The binary carries mint 1.11.0, which closes CVE-2026-82672, CVE-2026-94194, CVE-2026-91043 and
+  CVE-2026-92103. mint comes in through burrito and the server never calls it, but the package in
+  the release is now the one the audit accepts. gen_lsp 0.11.4 keeps its read buffer from growing
+  without bound and handles error responses from the client.
+
 ## [0.3.1] - 2026-09-18
 
 - The `# postern: pg=` comment at the top of a file wins over the `pg` option, as the settings
