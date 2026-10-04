@@ -52,8 +52,11 @@ what was verified, and stop when the point is made.
 
 A release is cut from `main`: the version moves in `mix.exs` and each editor package, the changelog
 entries get their date, and the Release workflow runs once as a dry run before the tag `vX.Y.Z` is
-pushed. The tag builds the binaries and the Windows installer, publishes the extension, updates the
-Homebrew tap and the Scoop bucket, opens the winget pull request, publishes the Neovim plugin and
-moves the action's major tag.
+pushed. The tag is annotated, `git tag -a`, with `Postern X.Y.Z` as its first line and the changelog
+entry as the rest, because the workflow takes the release notes from the tag message. The tag builds
+the binaries and the Windows installer, publishes the extension, updates the Homebrew tap and the
+Scoop bucket, opens the winget pull request, publishes the Neovim plugin and moves the action's
+major tag. A winget pull request still waiting on a moderator when the next one opens is closed as
+superseded.
 
 Security issues go through the [security policy](SECURITY.md), not an issue.
