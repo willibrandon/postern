@@ -33,7 +33,22 @@ mix test
 mix credo --strict
 mix format --check-formatted
 mix docs --warnings-as-errors
+mix dialyzer
+npx --yes pyright@1.1.414
 ```
+
+The Python smoke test uses strict type checking. Dialyzer checks the server and Mix tasks;
+its first run builds a dependency cache. VS Code treats the generated `mix.lock` as plain text
+because Mix's quoted keys otherwise produce unnecessary-quote warnings in ElixirLS.
+
+Postgrex is temporarily pinned to an official upstream commit that includes its text-query
+typespec fix and the security fixes in 0.22.4. Move it back to Hex when a release includes
+[the typespec correction](https://github.com/elixir-ecto/postgrex/pull/784).
+
+ElixirLS 0.31.1 can crash in this project because its bundled `GenLSP` modules collide with
+the project's dependency. Use a build containing [ElixirLS #1287](https://github.com/elixir-lsp/elixir-ls/pull/1287)
+via `elixirLS.languageServerOverridePath` until that fix is released. Clearing `.elixir_ls`
+or repeatedly restarting the unpatched server does not resolve the collision.
 
 For the editor packages: `npm run verify` and `npm test` in `editors/vscode`, `npm run validate` in
 `editors/fresh`, `nvim -l tests/minit.lua --busted` in `editors/nvim`, the batch `ert` run named in

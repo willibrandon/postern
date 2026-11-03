@@ -2,13 +2,9 @@ defmodule Postern.RuntimeArgs do
   @moduledoc """
   The command-line arguments, and whether the VM runs inside a Burrito binary.
 
-  Burrito is a dependency of the release alone, so the calls into it are
-  guarded at runtime rather than compiled away: a build without it then has
-  a `standalone?/0` that is a check rather than a constant the type checker
-  would fold into every caller.
+  Burrito starts only in a release. The calls into it are guarded at runtime
+  so an ordinary Mix session uses the VM's arguments instead.
   """
-
-  @compile {:no_warn_undefined, [Burrito.Util, Burrito.Util.Args]}
 
   alias Burrito.Util.Args, as: BurritoArgs
 

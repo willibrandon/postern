@@ -263,7 +263,7 @@ defmodule Postern.GucValue do
         strtod(value)
         |> then(fn
           {:ok, float, rest2} -> {:ok, float, rest2}
-          :error -> {:ok, number, rest}
+          {:error, _reason} -> {:ok, number, rest}
         end)
 
       {:ok, number, rest} ->

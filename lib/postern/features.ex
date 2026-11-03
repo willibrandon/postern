@@ -628,7 +628,7 @@ defmodule Postern.Features do
     enum_values = Catalog.array_literal(setting["enumvals"])
 
     cond do
-      is_list(enum_values) and enum_values != [] ->
+      enum_values != [] ->
         "**Values:** `#{Enum.join(enum_values, "`, `")}`"
 
       setting["min_val"] || setting["max_val"] ->

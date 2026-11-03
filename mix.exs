@@ -10,6 +10,7 @@ defmodule Postern.MixProject do
       elixir: "~> 1.18",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
+      dialyzer: [plt_add_apps: [:mix, :burrito]],
       releases: releases(),
       usage_rules: usage_rules(),
       name: "Postern",
@@ -30,10 +31,15 @@ defmodule Postern.MixProject do
     [
       {:gen_lsp, "~> 0.11.3"},
       {:jason, "~> 1.4"},
-      {:postgrex, "~> 0.22.4"},
-      {:burrito, "~> 1.6", only: :prod},
+      # Includes the query_type typespec fix (elixir-ecto/postgrex#784), not yet
+      # released on Hex. Return to Hex once a release includes that fix.
+      {:postgrex,
+       github: "elixir-ecto/postgrex", ref: "87afeb9d5e9089527a728f8403dcbaf0fe0f8f31"},
+      # Keep its types available to development tools without starting it there.
+      {:burrito, "~> 1.6", runtime: Mix.env() == :prod},
       {:usage_rules, "~> 1.2", only: [:dev, :test], runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
+      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:ex_doc, "~> 0.40", only: :dev, runtime: false}
     ]
   end
