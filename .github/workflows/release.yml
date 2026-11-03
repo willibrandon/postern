@@ -586,6 +586,13 @@ jobs:
         run: |
           Invoke-WebRequest -Uri https://aka.ms/wingetcreate/latest -OutFile wingetcreate.exe
 
+      - name: Install the current WinGet validator
+        shell: pwsh
+        run: |
+          Install-Module Microsoft.WinGet.Client -Repository PSGallery -Scope CurrentUser -Force
+          Repair-WinGetPackageManager -Latest -Force
+          winget --version
+
       - name: Generate the winget manifest (update existing)
         if: steps.check.outputs.exists == 'true'
         shell: pwsh
@@ -600,7 +607,7 @@ jobs:
             --version $version `
             --urls $url `
             --token $env:GH_TOKEN `
-            --out manifests
+            --out .
 
       - name: Generate the winget manifest (new package)
         if: steps.check.outputs.exists == 'false'
@@ -649,6 +656,12 @@ jobs:
 
           Write-Host "Generated postern manifests:"
           Get-ChildItem $manifestDir | ForEach-Object { Write-Host $_.Name }
+
+      - name: Prepare and validate the manifests before submission
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.publish.outputs.version }}
+        run: ./scripts/prepare-winget.ps1 -ManifestDirectory "manifests/w/willibrandon/postern/$env:VERSION"
 
       - name: Submit the winget PR via GitHub API
         shell: pwsh

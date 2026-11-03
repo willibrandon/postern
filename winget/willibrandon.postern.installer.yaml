@@ -1,4 +1,4 @@
-# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.9.0.schema.json
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.28.0.schema.json
 PackageIdentifier: willibrandon.postern
 PackageVersion: 0.2.1
 Platform:
@@ -17,4 +17,4 @@ Installers:
     InstallerSha256: PLACEHOLDER_SHA256_X64
     ProductCode: "{PLACEHOLDER_PRODUCT_CODE_X64}"
 ManifestType: installer
-ManifestVersion: 1.9.0
+ManifestVersion: 1.28.0
