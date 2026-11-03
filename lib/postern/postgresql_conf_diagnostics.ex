@@ -394,7 +394,6 @@ defmodule Postern.PostgresqlConfDiagnostics do
 
   defp option(options, key) when is_map(options), do: options[key] || options[Atom.to_string(key)]
   defp option(options, key) when is_list(options), do: Keyword.get(options, key)
-  defp option(_options, _key), do: nil
 
   defp option_version(options) when is_list(options), do: options[:pg] || options[:version]
 

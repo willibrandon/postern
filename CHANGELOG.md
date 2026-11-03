@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Correct type declarations and smoke-test annotations reported by ElixirLS and Pylance,
+  and check them in CI. Use Postgrex's upstream correction for text-query option types.
+
 - Update vulnerable server and VS Code dependencies, including Decimal and Minimatch. The
   extension keeps its language client's glob filters working with Minimatch's patched matcher.
 

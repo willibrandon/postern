@@ -51,16 +51,18 @@ defmodule Postern.Stdio do
       nil ->
         :ok
 
-      user ->
-        spawn(fn ->
-          ref = Process.monitor(user)
-
-          receive do
-            {:DOWN, ^ref, :process, ^user, _reason} -> System.halt(0)
-          end
-        end)
-
+      _user ->
+        spawn(&halt_on_user_exit/0)
         :ok
+    end
+  end
+
+  @spec halt_on_user_exit() :: no_return()
+  defp halt_on_user_exit do
+    ref = Process.monitor(:user)
+
+    receive do
+      {:DOWN, ^ref, :process, _user, _reason} -> System.halt(0)
     end
   end
 end

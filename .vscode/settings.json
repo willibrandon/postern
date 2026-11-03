@@ -1,0 +1,6 @@
+{
+  // Mix generates quoted atom keys that ElixirLS flags when parsing this data file.
+  "files.associations": {
+    "mix.lock": "plaintext"
+  }
+}

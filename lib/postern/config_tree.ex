@@ -137,7 +137,8 @@ defmodule Postern.ConfigTree do
   def include_span(%{span: span}), do: span
 
   @doc "Each assignment a later one of the same name overrides, with the one that counts."
-  @spec overridden(%{entries: [located()]}) :: [{located(), located()}]
+  @spec overridden(%{required(:entries) => [located()], optional(any()) => any()}) ::
+          [{located(), located()}]
   def overridden(%{entries: entries}) do
     entries
     |> Enum.filter(&match?(%{entry: %{type: :assignment}}, &1))
@@ -149,7 +150,8 @@ defmodule Postern.ConfigTree do
   end
 
   @doc "The assignment that counts for a name, or `nil` when the tree has none."
-  @spec winner(%{entries: [located()]}, String.t()) :: located() | nil
+  @spec winner(%{required(:entries) => [located()], optional(any()) => any()}, String.t()) ::
+          located() | nil
   def winner(%{entries: entries}, name) do
     name = String.downcase(name)
 

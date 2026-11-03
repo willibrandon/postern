@@ -8,12 +8,16 @@ the server down. Exits non-zero when any step fails, so CI can run it on each
 platform before the editor tests.
 """
 
+import io
 import json
 import os
 import subprocess
 import sys
 import tempfile
 import time
+from typing import Any
+
+Message = dict[str, Any]
 
 binary = sys.argv[1]
 workdir = tempfile.mkdtemp()
@@ -26,37 +30,41 @@ process = subprocess.Popen(
 )
 
 
-def send(message):
+def send(message: Message) -> None:
+    stdin = process.stdin
+    assert stdin is not None
     body = json.dumps(message).encode()
-    process.stdin.write(b"Content-Length: %d\r\n\r\n" % len(body) + body)
-    process.stdin.flush()
+    stdin.write(b"Content-Length: %d\r\n\r\n" % len(body) + body)
+    stdin.flush()
 
 
-def receive(timeout=60):
+def receive(timeout: float = 60) -> Message:
+    stdout, stderr = process.stdout, process.stderr
+    assert stdout is not None and stderr is not None
     deadline = time.time() + timeout
     headers = b""
     while not headers.endswith(b"\r\n\r\n"):
         if time.time() > deadline:
             raise TimeoutError("no response from the server")
-        chunk = process.stdout.read(1)
+        chunk = stdout.read(1)
         if not chunk:
-            stderr = process.stderr.read().decode(errors="replace")
-            raise EOFError("server closed stdout; stderr: " + stderr[:2000])
+            error_output = stderr.read().decode(errors="replace")
+            raise EOFError("server closed stdout; stderr: " + error_output[:2000])
         headers += chunk
     lengths = [
         h for h in headers.decode(errors="replace").split("\r\n") if h.lower().startswith("content-length")
     ]
     if not lengths:
-        rest = process.stdout.read1(400) if hasattr(process.stdout, "read1") else b""
+        rest = stdout.read1(400) if isinstance(stdout, io.BufferedReader) else b""
         raise ValueError("header block without Content-Length: %r; following bytes: %r" % (headers, rest))
-    body = process.stdout.read(int(lengths[0].split(":")[1]))
+    body = stdout.read(int(lengths[0].split(":")[1]))
     try:
         return json.loads(body)
     except ValueError:
         raise ValueError("body is not JSON; headers %r body %r" % (headers, body[:400]))
 
 
-def receive_response():
+def receive_response() -> Message:
     while True:
         message = receive()
         if message.get("method") == "window/logMessage":
@@ -149,12 +157,13 @@ while hba_diagnostics is None:
 assert any("shadows it" in d["message"] for d in hba_diagnostics), hba_diagnostics
 print("pg_hba diagnostics: ok")
 
-for request_id, method, params in (
+requests: tuple[tuple[int, str, Message], ...] = (
     (10, "textDocument/inlayHint", {"textDocument": {"uri": hba_uri}, "range": {"start": {"line": 0, "character": 0}, "end": {"line": 2, "character": 0}}}),
     (11, "textDocument/codeAction", {"textDocument": {"uri": hba_uri}, "range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 0}}, "context": {"diagnostics": []}}),
     (12, "textDocument/inlayHint", {"textDocument": {"uri": uri}, "range": {"start": {"line": 0, "character": 0}, "end": {"line": 3, "character": 0}}}),
     (13, "textDocument/codeAction", {"textDocument": {"uri": uri}, "range": {"start": {"line": 1, "character": 0}, "end": {"line": 1, "character": 0}}, "context": {"diagnostics": []}}),
-):
+)
+for request_id, method, params in requests:
     send({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params})
     reply = receive_response()
     assert "error" not in reply, (method, reply)
@@ -162,6 +171,7 @@ for request_id, method, params in (
 
 # An editor that closes the pipe without sending exit must not leave a runtime behind.
 second = subprocess.Popen([binary], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+assert second.stdin is not None and second.stdout is not None
 body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"processId": os.getpid(), "rootUri": None, "capabilities": {}}}).encode()
 second.stdin.write(b"Content-Length: %d\r\n\r\n" % len(body) + body)
 second.stdin.flush()

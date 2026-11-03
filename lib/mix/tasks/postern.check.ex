@@ -5,6 +5,7 @@ defmodule Mix.Tasks.Postern.Check do
   use Mix.Task
 
   @impl Mix.Task
+  @spec run([String.t()]) :: no_return()
   def run(args) do
     System.halt(Postern.CLI.run(["check" | args]))
   end

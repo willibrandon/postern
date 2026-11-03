@@ -68,7 +68,8 @@ defmodule Postern.Catalog do
   end
 
   @doc "Fetches one setting row from a loaded catalog."
-  @spec fetch(%{settings: map()}, String.t()) :: map() | nil
+  @spec fetch(%{required(:settings) => map(), optional(any()) => any()}, String.t()) ::
+          map() | nil
   def fetch(%{settings: settings}, name) do
     Map.get(settings, name) ||
       Enum.find_value(settings, fn {candidate, setting} ->
@@ -119,7 +120,7 @@ defmodule Postern.Catalog do
   end
 
   @doc "The modules whose settings a catalog knows, from the prefix before the dot."
-  @spec modules(%{settings: map()}) :: [String.t()]
+  @spec modules(%{required(:settings) => map(), optional(any()) => any()}) :: [String.t()]
   def modules(%{settings: settings}) do
     settings
     |> Enum.map(fn {_name, setting} -> setting["module"] end)
