@@ -20,6 +20,52 @@ env:
   NODE_VERSION: "24"
 
 jobs:
+  winget:
+    name: WinGet manifests
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the current WinGet validator
+        shell: pwsh
+        run: |
+          Install-Module Microsoft.WinGet.Client -Repository PSGallery -Scope CurrentUser -Force
+          Repair-WinGetPackageManager -Latest -Force
+          winget --version
+      - name: Validate generated manifests and reject invalid installer metadata
+        shell: pwsh
+        run: |
+          $manifestDir = Join-Path $env:RUNNER_TEMP 'postern-manifests'
+          New-Item -ItemType Directory -Path $manifestDir -Force | Out-Null
+          Get-ChildItem winget -Filter '*.yaml' | ForEach-Object {
+            $content = Get-Content $_.FullName -Raw
+            $content = $content.Replace('PLACEHOLDER_SHA256_X64', ('A' * 64))
+            $content = $content.Replace('{PLACEHOLDER_PRODUCT_CODE_X64}', '{93FE5A26-694C-4C1A-9795-1CECF4A2D5F4}')
+            Set-Content (Join-Path $manifestDir $_.Name) $content -NoNewline
+          }
+          ./scripts/prepare-winget.ps1 -ManifestDirectory $manifestDir
+
+          # Older generator output must be upgraded along with its schema headers.
+          Get-ChildItem $manifestDir -Filter '*.yaml' | ForEach-Object {
+            (Get-Content $_.FullName -Raw).Replace('1.28.0', '1.9.0') | Set-Content $_.FullName -NoNewline
+          }
+          ./scripts/prepare-winget.ps1 -ManifestDirectory $manifestDir
+          Get-ChildItem $manifestDir -Filter '*.yaml' | ForEach-Object {
+            if ((Get-Content $_.FullName -Raw).Contains('1.9.0')) { throw 'Deprecated schema remains.' }
+          }
+
+          $installer = Join-Path $manifestDir 'willibrandon.postern.installer.yaml'
+          (Get-Content $installer -Raw).Replace(('A' * 64), 'invalid-hash') | Set-Content $installer -NoNewline
+          try {
+            ./scripts/prepare-winget.ps1 -ManifestDirectory $manifestDir
+            throw 'Invalid installer metadata was accepted.'
+          } catch {
+            if ($_.Exception.Message -notlike 'WinGet manifest validation failed*') { throw }
+            $global:LASTEXITCODE = 0
+          }
+
   server:
     name: Server (PostgreSQL ${{ matrix.postgres }})
     runs-on: ubuntu-latest
