@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Update vulnerable dependencies and keep language client glob filters working with the patched
+  Minimatch matcher.
+
 ## [0.3.2] - 2026-10-03
 
 - Bundles server 0.3.2, whose dependencies carry the current security fixes. The language client

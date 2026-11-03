@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Update vulnerable server and VS Code dependencies, including Decimal and Minimatch. The
+  extension keeps its language client's glob filters working with Minimatch's patched matcher.
+
 ## [0.3.2] - 2026-10-03
 
 - The binary carries mint 1.11.0, which closes CVE-2026-82672, CVE-2026-94194, CVE-2026-91043 and
