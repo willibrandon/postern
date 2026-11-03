@@ -46,9 +46,11 @@ typespec fix and the security fixes in 0.22.4. Move it back to Hex when a releas
 [the typespec correction](https://github.com/elixir-ecto/postgrex/pull/784).
 
 ElixirLS 0.31.1 can crash in this project because its bundled `GenLSP` modules collide with
-the project's dependency. Use a build containing [ElixirLS #1287](https://github.com/elixir-lsp/elixir-ls/pull/1287)
-via `elixirLS.languageServerOverridePath` until that fix is released. Clearing `.elixir_ls`
-or repeatedly restarting the unpatched server does not resolve the collision.
+the project's dependency. [ElixirLS #1287](https://github.com/elixir-lsp/elixir-ls/pull/1287)
+mitigates the collision but still allows crashes while project modules load. A local build
+with a separate namespace for ElixirLS's bundled protocol modules can be selected with
+`elixirLS.languageServerOverridePath`. Clearing `.elixir_ls` or repeatedly restarting the
+unpatched server does not resolve the collision.
 
 For the editor packages: `npm run verify` and `npm test` in `editors/vscode`, `npm run validate` in
 `editors/fresh`, `nvim -l tests/minit.lua --busted` in `editors/nvim`, the batch `ert` run named in
